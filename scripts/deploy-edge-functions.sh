@@ -10,5 +10,6 @@ for fn in quiz-validate award-xp vote-next-book scheduled-reminders ai-recommend
 done
 supabase functions deploy stripe-webhook --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
 
-# ai-user-embeddings is omitted until the `build_user_reading_snapshot` RPC dependency
-# can be created from a complete `book_reviews` definition in the SDD.
+# ai-user-embeddings is omitted: the RPC now exists, but deployment still requires
+# authentication/ownership validation for user_id, privacy review of the snapshot,
+# configured secrets, and tests. Do not add it to the loop until those gates pass.

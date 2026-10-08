@@ -5,11 +5,16 @@ import { cors } from "../_shared/cors.ts";
 serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    supabaseUrl,
+    serviceRoleKey,
     { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
   );
+  // A request-scoped client respeita o JWT do leitor. XP é a única operação
+  // nesta função que exige o cliente privilegiado sem substituir seu JWT.
+  const privileged = createClient(supabaseUrl, serviceRoleKey);
 
   const { chapter_id, answers } = await req.json(); // answers: [{question_id, chosen_idx}]
   const { data: user } = await supabase.auth.getUser();
@@ -36,7 +41,7 @@ serve(async (req) => {
       detail.map((d) => ({ ...d, attempt_id: attempt.id })),
     );
     // XP proporcional
-    await supabase.rpc("award_xp", {
+    await privileged.rpc("award_xp", {
       p_user: user.user.id, p_source: "quiz_answer",
       p_amount: 50, p_ref: attempt.id,
     });

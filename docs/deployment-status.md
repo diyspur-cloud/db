@@ -1,60 +1,103 @@
-# Relatório de implantação e double check
+# Relatório de implantação e auditoria final
 
 **Data:** 2026-10-08 (UTC−03:00)  
 **Projeto Supabase:** `xjhehhfhhoomblcggjpk`  
-**Escopo:** implementação do SDD `SDDBD2.md`, sem inventar schema ou regras ausentes.
+**Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db)
+**Escopo:** migrations aditivas do anexo, hardening, refresh agendado da MV, testes e documentação. Nenhuma Edge Function foi implantada; jobs de reminders e seeds de amostra não foram aplicados.
 
-## Estado aplicado e verificado
+> **Status:** as alterações de banco descritas aqui foram aplicadas. O banco já não tem os alertas críticos anteriores de views `SECURITY DEFINER` nem FKs sem índice. Isso **não** certifica o frontend nem integrações externas: revisar chamadas RPC, autenticação e uso de extensões antes de produção.
 
-O schema e os seeds foram aplicados remotamente. Comparação automatizada dos nomes no SDD com as migrations-fonte: **75/75 tabelas** e **30/30 ENUMs** correspondem, sem tabelas ou enums extras nas migrations ativas. O parser PostgreSQL validou **34 arquivos SQL**, sem erros de sintaxe.
+## Estado remoto final conferido
 
-| Item | Verificação remota |
-|---|---:|
-| Tabelas públicas | 75 |
-| Tabelas com RLS habilitado | 75 |
-| Policies RLS | 122 |
-| Chaves estrangeiras | 126 |
-| Índices catalogados | 150 |
-| Views | 7 |
-| ENUMs | 30 |
-| Triggers de usuário | 12 |
-| Tabelas na publicação Realtime | 15 |
-| Buckets especificados | 10 |
-| Seeds registrados | 4 migrations idempotentes |
+| Objeto/métrica | Total | Observação |
+|---|---:|---|
+| Tabelas em `public` | 76 | 75 do baseline + `book_reviews` |
+| Tabelas com RLS ativo | 76 | todas as tabelas públicas do inventário |
+| Policies em `public` | 135 | inclui regras explícitas para reviews, RSVP, votos e desafios |
+| FKs em `public` | 130 | nenhuma FK ficou sem índice de cobertura |
+| Índices em `public` + `private` | 221 | após remoção da cópia idêntica `vtc_sec_idx` |
+| Views comuns em `public` | 9 | todas com `security_invoker=true` |
+| Materialized views | 1 | `private.mv_book_community_stats`, fora do schema público da Data API |
+| ENUMs | 30 | compatíveis com o baseline/SDD |
+| Funções de aplicação com `search_path` fixo | 18 | `pg_catalog, public` |
+| Policies com `auth.uid()` direto sem initplan | 0 | verificado no catálogo |
+| Migrations remotas | 34 | 24 históricas + 10 desta implementação |
+| Tabelas da publicação `supabase_realtime` | 15 | publicação preexistente preservada |
+| Buckets do SDD | 10 | preservados |
+| Jobs pg_cron ativos | 1 | refresh da MV privada a cada 6h; nenhum job HTTP de reminders |
 
-Os seeds confirmados contêm 1 autor, 1 livro, 1 temporada, 5 capítulos, 1 quiz, 1 prompt de anfitrião, 6 conquistas, 10 avisos de conteúdo, 13 rótulos de humor, 4 avisos associados ao livro, 5 milestones, 2 conteúdos extras, 1 atividade, 1 prompt de caderno, 4 planos de assinatura e 1 edição de newsletter **não enviada**.
+A tabela `book_reviews` e os quatro campos de contexto foram criados sem migrar dados de usuário; `book_reviews` tinha 0 linhas e `user_clubs` tinha 0 linhas. O MV continha a linha do livro demonstrativo. O projeto tinha 0 perfis e 0 admins; por isso os seeds opcionais de reviews/clube não foram executados. Nenhuma migration apagou nem reescreveu linhas existentes.
 
-O histórico remoto contém migrations executadas por blocos: `sdd_001`–`sdd_003`, `sdd_004a`–`sdd_004i`, `sdd_005a`–`sdd_005c`, `sdd_006`–`sdd_008c` e `sdd_009`–`sdd_010c`. O último seed foi registrado com o nome `sdd_010c_seed_plans_newsletter_retry` após uma colisão de timestamp no histórico; a instrução era idempotente e foi verificada pelos contadores.
+## Implementação de schema e acesso
 
-## Pendências estritas do SDD
+- Criada `public.book_reviews`: rating e nível de conteúdo 0–5, texto opcional até 20.000 caracteres, flag de spoiler, timestamps, soft-delete e unicidade por `(book_id, user_id)`.
+- Acrescentadas a `public.user_clubs` as colunas opcionais `current_book_id`, `current_season_id`, `current_started_at` e `current_ends_at`; FKs usam `ON DELETE SET NULL`.
+- `meeting_rsvps` e `user_challenges`: leitura própria/admin e escrita do titular, dividida por comando SQL. `host_prompt_votes`: somente o titular pode ler/alterar linhas individuais.
+- `v_chapter_audience` e `v_host_prompt_results` retornam agregados por funções internas estreitas. A API não recebe permissão de leitura para as linhas individuais de votos.
+- `v_book_community_stats` publica estatísticas comunitárias; o MV que a alimenta foi movido para `private`. `v_club_progress_panel` usa `user_clubs`, não uma tabela nova `public.clubs`.
+- `build_user_reading_snapshot(uuid)` é `SECURITY INVOKER`, não executável por `anon` e restringe JWT autenticado ao próprio `p_user`.
+- Foram endurecidas as 9 views, fixados os paths das 18 funções de aplicação e revogado `EXECUTE` de cliente nas rotinas privilegiadas afetadas.
+- Criados índices para as 130 FKs segundo critério de prefixo; removido um índice B-tree redundante exato, mantendo `vtc_chapter_sec_idx`.
+- Habilitado `pg_cron` e criado `refresh-mv-book-community-stats` (`0 */6 * * *`) para refresh concorrente de `private.mv_book_community_stats`.
 
-1. **Três tabelas têm RLS habilitado, mas não possuem policy no documento:** `public.meeting_rsvps`, `public.host_prompt_votes` e `public.user_challenges`. Foram mantidas sem policies, exatamente como especificado. Sem policy, o acesso via RLS fica negado por padrão; uma regra de leitura/escrita não foi inventada.
-2. **Três objetos SQL bloqueados por relações/colunas ausentes:** `mv_book_community_stats` e `build_user_reading_snapshot` dependem de `public.book_reviews`; `v_club_progress_panel` depende de `public.clubs.current_book_id`. O SDD não define `book_reviews`, a tabela `public.clubs` nem essa coluna; os objetos permanecem em `supabase/migrations/blocked/`.
-3. **Histórico CLI:** o Supabase MCP gerou versões remotas `20261008…`, diferentes dos prefixos `20260101…` dos arquivos locais. Não rode `supabase db push` diretamente contra este projeto antes de reconciliar o histórico/baseline para evitar reaplicações conflitantes.
+Detalhes, sequência e critérios estão em [`docs/implementation-plan.md`](./implementation-plan.md). Os trechos originais em `supabase/migrations/blocked/` ficam apenas para rastreabilidade e não devem ser executados.
 
-## Edge Functions
+## Verificações executadas
 
-Há dez fontes de Edge Functions no repositório; **nenhuma está implantada** no projeto. O listado remoto estava vazio. O deploy foi deixado pendente porque:
+### Catálogo
 
-- integrações podem exigir secrets do projeto (`OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`), e os valores não foram incluídos nem transferidos;
-- `ai-user-embeddings` chama `build_user_reading_snapshot`, que depende da tabela `book_reviews` ausente;
-- a revisão estática encontrou endpoints que usam `SUPABASE_SERVICE_ROLE_KEY` e aceitam identificadores enviados no corpo sem validar que pertençam ao usuário autenticado. Em especial, o despacho de newsletter pode enviar para todos os inscritos confirmados e não contém verificação de administrador. Implantá-los literalmente daria acesso a operações privilegiadas a qualquer chamador com JWT válido.
+- Confirmados 76 tabelas, 135 policies, 130 FKs, 9 views invoker, MV dentro de `private` e 18 funções com path fixo.
+- Nenhuma FK sem índice de cobertura.
+- Nenhuma policy pública contém chamada direta a `auth.uid()` fora do padrão initplan verificado.
+- Nenhuma das quatro tabelas de políticas corrigidas foi listada nos avisos restantes de múltiplas policies permissivas.
+- MV acessível pelo SELECT necessário à view invoker, mas `private` sem `CREATE` para `anon`.
+- Cópia `vtc_sec_idx` removida; `vtc_chapter_sec_idx` mantido.
+- Job pg_cron ativo confirmado como `jobid=1`, com comando para refresh concorrente da MV privada. O refresh manual único também foi executado sem erro; a primeira execução automática ainda aguarda o próximo horário programado.
 
-As fontes foram preservadas sem alterações para respeitar a fidelidade estrita solicitada. Antes do deploy é necessário autorizar ajustes de autorização e configurar os secrets na plataforma Supabase — não enviar valores de secrets no chat ou versioná-los.
+### Data API (GET anônimo, sem escrita)
 
-## Advisory checks do Supabase
+| Requisição | Status | Resultado |
+|---|---:|---|
+| `v_book_community_stats` | 200 | Dom Casmurro; 0 avaliações |
+| `v_chapter_audience` | 200 | contagens agregadas |
+| `v_host_prompt_results` | 200 | contagens agregadas |
+| `book_reviews` | 200 | conjunto vazio, acesso de leitura |
+| `host_prompt_votes` direto | 401 / SQLSTATE `42501` | acesso negado |
+| `meeting_rsvps` direto | 401 / SQLSTATE `42501` | acesso negado |
+| `user_challenges` direto | 401 / SQLSTATE `42501` | acesso negado |
 
-Executados após a implantação por meio dos advisors de segurança e performance. Alertas reportados:
+Não foram criados usuários de teste, nem realizadas inserções/updates para testar a policy de titulares em um banco com dados. O caminho autenticado titular/admin precisa de integração em branch/projeto isolado.
 
-- **7 views SECURITY DEFINER** — linter nível `ERROR`; views comuns podem executar com os privilégios do proprietário e contornar RLS. Revisão: [Supabase linter 0010](https://supabase.com/docs/guides/database/database-linter?lint=0010_security_definer_view).
-- **3 tabelas RLS sem policies** — nível `INFO`; correspondem aos três itens acima. [Linter 0008](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy).
-- **18 funções com `search_path` mutável** e **9 funções SECURITY DEFINER executáveis por `anon` e `authenticated`** — requerem revisão de `search_path` e privilégios `EXECUTE`. [Linter 0011](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable), [linter 0028](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable), [linter 0029](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable).
-- **5 extensões no schema `public`** — [linter 0014](https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public).
-- **63 FKs sem índice de cobertura** — [linter 0001](https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys).
-- **62 policies com avaliação de funções `auth.*` linha a linha** — oportunidade de otimização por initplan; [guia de RLS](https://supabase.com/docs/guides/database/postgres/row-level-security#call-functions-with-select).
+### Advisors finais
 
-Esses advisories refletem o SQL literal do SDD; não foram alterados porque as instruções exigiam não modificar schema ou lógica. Recomendações típicas incluem `security_invoker=true` nas views, `SET search_path` explícito e restrição de `EXECUTE` nas funções privilegiadas, mas isso exige uma migration de hardening separada, fora da especificação literal. Não disponibilize o projeto a usuários finais antes de decidir como tratar os alertas `ERROR` de views.
+**Segurança:** o resultado final mantém 5 avisos `extension_in_public`: `vector`, `pg_trgm`, `citext`, `unaccent` e `btree_gin`. A mudança dessas extensões foi adiada por poder alterar resolução de tipos, operadores, search path e contratos de RPC. Não restou aviso do advisor para views `SECURITY DEFINER` nem para MV exposto no schema da Data API.
 
-## Segredos
+**Performance:**
 
-Nenhum valor de secret foi gravado no repositório ou incluído neste relatório. O repositório GitHub configurado é público; mantenha nele apenas código e configuração não sensível.
+- 108 avisos informativos `unused_index`; o contador `idx_scan` sem tráfego suficiente não prova que o índice é inútil. Em particular, índices de FK foram mantidos para operações de integridade e futuros filtros.
+- 215 achados `multiple_permissive_policies` do desenho RLS histórico. São achados do linter por papel/ação (não 215 tabelas distintas); a refatoração abrangente do baseline foi evitada para não alterar o contrato de acesso fora do escopo. As policies novas deste trabalho não aparecem nesses achados.
+- Nenhum achado `duplicate_index` após remover a cópia idêntica.
+
+## Histórico e compatibilidade com CLI
+
+O remoto contém 34 migrations: 24 entradas históricas `sdd_*` (incluindo seeds), mais dez versões `20261008…` detalhadas no plano. Os dez arquivos locais novos correspondem exatamente às versões remotas. O baseline granular local segue com prefixo `20260101…`, diferente dos nomes agregados já registrados remotamente.
+
+**Não execute `supabase db push`, `supabase migration up` ou reaplique os bundles sobre o projeto atual** antes de reconciliar o baseline e o histórico. O gerador de bundles contém seis grupos para bootstrap/revisão de um ambiente novo; ele não é uma instrução de reaplicação no projeto atual.
+
+## Edge Functions e integração da aplicação
+
+Há fontes de Edge Functions no repositório, mas a lista remota de funções implantadas continua vazia. O contrato de autorização para os dez endpoints está em [`edge-functions-authorization.md`](./edge-functions-authorization.md). `quiz-validate` foi ajustada para usar cliente separado service-role apenas para `award_xp`; isso é uma alteração de fonte, não um deploy. O RPC agora não pode ser chamado diretamente por `anon`/`authenticated`, e consumidores fora deste repositório devem migrar para uma camada de servidor validada.
+
+`ai-user-embeddings` segue fora do script de deploy: seu RPC agora existe, mas o handler ainda recebe `user_id` sem demonstrar a propriedade do usuário e pode tratar snapshot potencialmente sensível. Newsletter, Stripe, secrets, rate limiting e autorização admin também precisam de revisão antes de qualquer deploy.
+
+## Referências de mudança
+
+- Migrations complementares: `supabase/migrations/20261008*.sql` (dez migrations).
+- Job de refresh pg_cron: `refresh-mv-book-community-stats`; cron de reminders deliberadamente não criado.
+- Seeds de demonstração de reviews/clube: `supabase/dev-seeds/`, somente para ambiente de desenvolvimento.
+- Plano de desenvolvimento: [`implementation-plan.md`](./implementation-plan.md).
+- Pendências históricas e decisão sobre `public.clubs`: [`implementation-blockers.md`](./implementation-blockers.md).
+- Auditoria SQL read-only: [`supabase/security-audit.sql`](../supabase/security-audit.sql).
+- Supabase CLI: use somente depois de reconciliar o histórico de baseline.
+
+Nenhuma chave, token, service-role key ou dado pessoal foi gravado nesta documentação.
