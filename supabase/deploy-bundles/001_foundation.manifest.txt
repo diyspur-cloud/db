@@ -1,0 +1,13 @@
+20260101000000_extensions_and_enums.sql
+20260101000100_profiles.sql
+20260101000200_books_and_authors.sql
+20260101000300_seasons_and_chapters.sql
+20260101000400_meetings.sql
+20260101000500_progress.sql
+20260101000600_comments_and_reactions.sql
+20260101000700_quiz.sql
+20260101000800_gamification.sql
+20260101000900_polls_and_votes.sql
+20260101001000_achievements.sql
+20260101001100_notifications.sql
+20260101001200_p2_tables.sql
