@@ -5,6 +5,8 @@
 **Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db)
 **Escopo:** migrations aditivas do anexo, hardening, refresh agendado da MV, testes e documentação. Nenhuma Edge Function foi implantada; jobs de reminders e seeds de amostra não foram aplicados.
 
+**Backup/restore:** não foi criado backup ou restore point manual durante esta execução. As migrations foram aditivas e não alteraram/apagaram linhas existentes, mas deve-se criar um restore point antes de futuras mudanças estruturais, especialmente antes de mover extensões ou reconciliar o histórico.
+
 > **Status:** as alterações de banco descritas aqui foram aplicadas. O banco já não tem os alertas críticos anteriores de views `SECURITY DEFINER` nem FKs sem índice. Isso **não** certifica o frontend nem integrações externas: revisar chamadas RPC, autenticação e uso de extensões antes de produção.
 
 ## Estado remoto final conferido

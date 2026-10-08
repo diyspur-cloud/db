@@ -202,6 +202,8 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 
 As migrations foram desenhadas para preservar linhas existentes, mas DDL não é automaticamente reversível. **Não** faça rollback destrutivo de `book_reviews`, colunas de `user_clubs` ou índices em produção sem verificar se o aplicativo já começou a gravar/ler esses objetos.
 
+**Registro desta execução:** nenhum backup ou restore point manual foi criado antes do deploy. Nenhuma linha existente foi apagada ou reescrita; para novas mudanças estruturais, crie e valide um restore point e prefira ambiente isolado.
+
 - Se uma view/ACL causar regressão, preferir migration corretiva para ajustar grants/contract, mantendo RLS habilitado.
 - Se uma aplicação depender do RPC `award_xp` direto, redirecionar para serviço de backend validado; não restaurar indiscriminadamente `EXECUTE` para `anon`/`authenticated`.
 - Para mudança de policy, manter a versão anterior em migration/histórico e preparar testes de titular/admin antes da alteração.
