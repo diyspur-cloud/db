@@ -1,27 +1,29 @@
 # Supabase database — Clube de Leitura
 
-Repositório de implementação baseado em [`SDDBD2.md`](./SDDBD2.md). Inclui migrations SQL modulares, seeds, Edge Functions e arquivos TypeScript do cliente/perfil.
+Implementação versionada do SDD [`SDDBD2.md`](./SDDBD2.md), com migrations SQL, seeds, arquivos de referência TypeScript e fontes de Edge Functions.
 
-## Projeto alvo
+## Projeto e repositório
 
 - Supabase project ref: `xjhehhfhhoomblcggjpk`
-- Git remote: `https://github.com/diyspur-cloud/db`
-- **Visibilidade do repositório:** pública (confirmada pelo GitHub ao validar o destino). Não coloque segredos, tokens ou dados pessoais neste repositório.
+- GitHub: [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db)
+- Visibilidade: pública. Não adicionar tokens, service keys, segredos de integração nem dados pessoais.
 
-## Aplicação
+## Estado da implantação
 
-As migrations em `supabase/migrations/` mantêm a separação modular e a ordem definida pelo SDD. Para execução via Supabase MCP, `supabase/deploy-bundles/` contém os grupos concatenados e manifestos auditáveis, gerados por `python3 scripts/build-remote-bundles.py`. Os seeds ficam separados em `supabase/seed.sql` e `supabase/seed_complement.sql`.
+O escopo SQL executável foi aplicado no Supabase. O relatório do double check, contagens verificadas, alertas dos advisors e pendências está em [`docs/deployment-status.md`](./docs/deployment-status.md).
 
-A aplicação remota ocorre nesta ordem: `001_foundation`, `002_base_security_and_functions`, `003_realtime_and_storage`, `004_complement_schema`, `005_complement_security_functions_views`, depois os dois seeds. Os objetos dependentes de referências não definidas estão em `supabase/migrations/blocked/` e **não** nos bundles ativos.
+As migrations-fonte estão em `supabase/migrations/`; os dados-base idempotentes estão em `supabase/seed.sql` e `supabase/seed_complement.sql`. Os bundles de execução MCP ficam em `supabase/deploy-bundles/` e são gerados por `python3 scripts/build-remote-bundles.py`.
+
+**Atenção:** a ferramenta de implantação remota registrou versões `20261008…` no histórico do Supabase, enquanto os arquivos-fonte têm nomes `20260101…`. Não execute `supabase db push` diretamente contra o projeto já implantado antes de reconciliar esse histórico/baseline; consulte o relatório.
 
 ## Edge Functions
 
-As fontes correspondem aos exemplos do SDD em `supabase/functions/`. Para deploy via CLI, configure `SUPABASE_PROJECT_REF` e secrets do lado do Supabase (por exemplo, `OPENAI_API_KEY`, `RESEND_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) sem versioná-los. Veja `scripts/deploy-edge-functions.sh`. `ai-user-embeddings` aguarda a definição explícita do RPC/tabela de reviews ausentes.
+As fontes estão em `supabase/functions/` e o script de deploy em `scripts/deploy-edge-functions.sh`. Nenhuma Edge Function foi implantada nesta rodada: várias requerem secrets de OpenAI/Stripe/Resend e algumas precisam de endurecimento de autenticação/autorização para não expor operações privilegiadas. Consulte [`docs/deployment-status.md`](./docs/deployment-status.md) antes do deploy.
 
-## Bloqueios do SDD
+## Limites do SDD
 
-Veja [`docs/implementation-blockers.md`](./docs/implementation-blockers.md): `book_reviews` e `clubs.current_book_id` são referenciados por três objetos SQL, mas não definidos no documento. Não criei schema fictício.
+Três objetos SQL foram isolados em `supabase/migrations/blocked/` porque o próprio SDD referencia objetos não definidos: `public.book_reviews` e `public.clubs.current_book_id`. Veja [`docs/implementation-blockers.md`](./docs/implementation-blockers.md).
 
-## Geração de tipos
+## Tipos TypeScript
 
-Após aplicar as migrations, gere o tipo de banco real via `supabase gen types typescript --linked`; instruções em `src/lib/supabase/README.md`.
+Depois de reconciliar o histórico de migrations, gere os tipos a partir do schema remoto e atualize `src/types/`; instruções em [`src/lib/supabase/README.md`](./src/lib/supabase/README.md).
