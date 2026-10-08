@@ -2,7 +2,7 @@
 
 Repositório de banco de dados do **Clube de Leitura**, organizado a partir do documento de desenho [`SDDBD2.md`](./SDDBD2.md). Reúne migrations SQL revisáveis, seeds do MVP e de expansão, consultas de auditoria, bundles de execução, contratos TypeScript de domínio e fontes de Edge Functions.
 
-> **Leia antes de usar:** o baseline do SDD e as migrations complementares deste plano foram aplicados ao projeto Supabase listado abaixo. As views públicas agora usam `security_invoker`, as três tabelas sem policies receberam regras explícitas e as funções de aplicação foram endurecidas. Ainda há trabalho antes de um lançamento: reconciliar o SDD e o histórico do CLI, validar consumidores autenticados de RPC e revisar/deployar Edge Functions com autorização e secrets corretos. Nenhuma Edge Function foi implantada.
+> **Leia antes de usar:** as 13 migrations complementares descritas aqui foram aplicadas ao projeto Supabase abaixo. O hardening inclui projeções seguras para perfil/feed/quiz, policies de ownership, proteção de dados pessoais, spoilers e progresso, membership de clubes sem autoelevação de papel, proteção do nível do leitor e consentimento LGPD com timestamp gerado no banco. A suíte PGlite reproduz as migrations e testa papéis/RLS; não foram criados usuários reais no projeto. Nenhuma Edge Function foi implantada, e o histórico do CLI continua exigindo reconciliação antes de `db push`.
 
 ## 1. Identificação e links
 
@@ -25,40 +25,40 @@ O repositório GitHub é público. **Não inclua nele** `.env`, credenciais, cha
 
 ## 2. Resumo executivo do estado atual
 
-O baseline executável do SDD continua correspondendo a **75 tabelas** e **30 ENUMs**. Esta implementação acrescentou **uma tabela deliberada** (`book_reviews`), quatro campos opcionais em `user_clubs`, policies, views agregadas e hardening. A auditoria remota final de 8 de outubro de 2026 confirmou:
+O baseline executável do SDD continua correspondendo a **75 tabelas** e **30 ENUMs**. Esta implementação acrescentou **uma tabela deliberada** (`book_reviews`), quatro campos opcionais em `user_clubs`, views, policies e hardening. A auditoria remota final de 8 de outubro de 2026 confirmou:
 
 | Categoria | Quantidade encontrada |
 |---|---:|
 | Tabelas em `public` / com RLS | 76 / 76 |
-| Policies RLS em `public` | 135 |
+| Policies RLS em `public` | 155 |
 | Chaves estrangeiras / FKs sem índice de cobertura | 130 / 0 |
-| Índices em `public` e `private` | 221 |
-| Views comuns públicas (`security_invoker=true`) | 9 |
+| Índices em `public` e `private` | 222 |
+| Views públicas (`security_invoker=true`) | 12 |
 | Materialized views | 1, em `private` |
 | Tipos ENUM | 30 |
-| Funções de aplicação com `search_path` fixo | 18 |
+| Funções `public`/`private` com `search_path` fixo | 32 |
 | Policies com `auth.uid()` direto sem initplan | 0 |
-| Triggers de usuário no schema `public` | 12 |
+| Triggers de usuário no schema `public` | 13 |
 | Tabelas na publicação `supabase_realtime` | 15 |
 | Buckets do SDD em Storage | 10 |
-| Migrations remotas | 34 (24 históricas + 10 novas) |
+| Migrations remotas | 37 (24 históricas + 13 novas) |
 | Jobs `pg_cron` ativos | 1 (refresh da MV a cada 6h) |
-| Arquivos SQL em `supabase/` validados com parser PostgreSQL | 53, sem erro de sintaxe |
+| Arquivos SQL em `supabase/` validados com parser PostgreSQL | 56, sem erro de sintaxe |
 
-Os números foram consultados no projeto remoto e não são garantia de comportamento de todo consumidor externo. O [relatório de implantação](./docs/deployment-status.md) guarda testes, ressalvas e findings dos advisors; o [plano de implementação](./docs/implementation-plan.md) descreve o passo a passo e os critérios de aceite.
+Os números foram consultados no projeto remoto; não substituem testes de integração com contas reais. O [relatório de implantação](./docs/deployment-status.md) contém resultados e findings de advisors; o [plano detalhado](./docs/implementation-plan.md) registra migrations, riscos, sequência de desenvolvimento e critérios de aceite. A suíte executável em `scripts/security-smoke/` aplica as três migrations finais num PostgreSQL WASM isolado e testa cenários negativos/positivos.
 
 ### Pendências relevantes — não ignorar
 
-1. **Extensão deliberada do contrato:** `book_reviews` e os campos de leitura atual foram adicionados como migrations novas. O SDD ainda deve ser reconciliado para documentar a decisão e os contratos.
-2. **Policies corrigidas:** `meeting_rsvps`, `host_prompt_votes` e `user_challenges` já têm regras explícitas de titular/admin; acesso anônimo direto a essas tabelas continua negado.
-3. **Views endurecidas:** as nove views comuns usam `security_invoker=true`; o materialized view de livros foi retirado de `public` e fica em `private`.
-4. **Extensões no schema `public`:** cinco alertas (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`) continuam. Movê-las sem testes pode alterar resolução de tipos, operadores e RPCs.
-5. **Edge Functions não implantadas:** `award_xp` agora é somente service-role; consumidores externos que chamem essa RPC diretamente precisam migrar para um endpoint de servidor validado. Revisar authorization, ownership, consentimento e secrets antes de deploy.
-6. **Histórico CLI ainda exige reconciliação:** as dez migrations complementares correspondem exatamente às versões remotas `20261008…`, mas o baseline granular local `20260101…` não é igual às 24 entradas remotas `sdd_*`. Não execute `supabase db push` contra o projeto atual.
-7. **Este repositório não é um aplicativo Next.js executável isoladamente:** não contém `package.json`, `supabase/config.toml` nem o arquivo gerado `src/lib/supabase/database.types.ts`.
-8. **Avisos de performance remanescentes:** o advisor lista 108 índices sem uso medido e 215 achados de múltiplas policies permissivas no modelo RLS histórico. Os números são findings do linter, não contagens de tabelas distintas; não apagar índices/policies em massa sem tráfego e análise por tabela.
+1. **Contrato/SDD:** documentar formalmente `book_reviews`, os quatro campos de leitura em `user_clubs` e as novas garantias de privacidade/RLS.
+2. **Integração com Auth real:** PGlite simula `anon`/`authenticated` e JWT local, mas esta rodada não criou usuários nem validou sessões reais, Storage autenticado ou fluxo admin em branch Supabase isolada.
+3. **Entrega de produto:** conectar a aplicação às projeções seguras `v_profiles_public`, `v_comments_visible`, `v_feed_posts_visible`, `v_quiz_questions_public` e às RPCs próprias de perfil; confirmar os consumidores de consentimento e quiz.
+4. **Edge Functions não implantadas:** `award_xp` é somente service-role; `quiz-validate` tem fonte revisada, mas não foi deployada. O rate limit atual é um pre-check sujeito a concorrência; antes do deploy, tornar a limitação atômica no banco/gateway, validar acesso ao capítulo e tornar a atribuição de XP idempotente, além de revisar consentimento e secrets.
+5. **Advisors de segurança:** permanecem 5 avisos de extensões em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Não há mais aviso de SECURITY DEFINER exposto no schema `public`.
+6. **Histórico CLI ainda exige reconciliação:** as 13 migrations complementares correspondem às versões remotas `20261008…`, mas o baseline granular local `20260101…` diverge das 24 entradas remotas `sdd_*`. Não execute `supabase db push` contra o projeto atual.
+7. **Aplicação/tipos:** este repositório de banco não é um aplicativo Next.js executável isoladamente e não contém `supabase/config.toml` nem `src/lib/supabase/database.types.ts` gerado.
+8. **Performance:** os advisors registram 109 índices sem uso medido e 165 achados de policies permissivas do modelo histórico (por role/ação, não por tabelas distintas). Não remover índices ou refatorar policies em massa sem medir carga e verificar o contrato.
 
-As mudanças foram registradas em migrations aditivas, sem alterar linhas existentes. As alterações de autorização e visibilidade estão intencionais e explicitadas neste README: especialmente o acesso a RPCs privilegiadas e a avaliação das views como o chamador.
+As migrations aditivas foram aplicadas sem excluir linhas; a única normalização de dados preexistentes foi preencher `comments.min_percent` nulo como `100` para spoiler ou `0` nos demais casos. Mudanças de grants e visibilidade são intencionais. O endpoint público de perfil usa `SECURITY INVOKER`; a leitura elevada fica em helper não exposto `private`, e o timestamp LGPD é controlado por trigger do banco.
 
 ## 3. Arquitetura proposta
 
@@ -95,7 +95,11 @@ O diagrama é o desenho do SDD, não uma declaração de que todos os componente
 │   └── supabase-reference.md              # referências consultadas
 ├── scripts/
 │   ├── build-remote-bundles.py            # concatena migrations em bundles ordenados
-│   └── deploy-edge-functions.sh           # exemplo/script CLI; exige análise e secrets
+│   ├── deploy-edge-functions.sh           # exemplo/script CLI; exige análise e secrets
+│   └── security-smoke/
+│       ├── package.json                    # dependência isolada do teste PGlite
+│       ├── package-lock.json
+│       └── test.mjs                        # smoke de grants/RLS/privacidade
 ├── supabase/
 │   ├── migrations/                        # SQL-fonte, granular e revisável
 │   │   └── blocked/                       # referências históricas; não executar
@@ -229,13 +233,18 @@ As migrations declaram `pgcrypto`, `uuid-ossp`, `vector` (pgvector), `pg_trgm`, 
 
 ## 7. RLS, Storage e limites de acesso
 
-Todas as 76 tabelas do schema `public` têm RLS habilitado. As 135 policies implementam, conforme o módulo, padrões como:
+Todas as 76 tabelas do schema `public` têm RLS habilitado. As 155 policies implementam, conforme o módulo, padrões como:
 
 - conteúdo editorial com leitura ampla e escrita administrativa;
 - progressos, notificações, diário e preferências vinculados ao próprio usuário;
 - comentários e itens sociais com regras de autoria, visibilidade, exclusão lógica ou relacionamento;
 - listas e diários públicos/privados/compartilhados;
 - assinaturas, pagamentos e newsletter com leituras/alterações administrativas ou do titular;
+- leitura pública de perfil somente pela projeção `v_profiles_public`; PII fica na RPC própria do usuário;
+- comentários e publicações com texto/metadados de spoiler mascarados até o progresso do leitor atingir o limite;
+- respostas corretas de quiz disponíveis somente ao processo de validação no servidor; tentativas não são inseríveis pelo cliente; `quiz-validate` está revisada, mas ainda não foi implantada;
+- membership em clube sem autoatribuição de `owner`/`moderator`; `profiles.role`, `profiles.level` e timestamps de consentimento são não editáveis pelo cliente;
+- diário e respostas de prompts com policies separadas por `INSERT`/`UPDATE`/`DELETE`, mantendo SELECT baseado em visibilidade;
 - uso de `public.is_admin()` em operações destinadas a admins.
 
 RLS habilitado **não significa que toda tabela tenha policy**; nesta implementação, as três lacunas foram deliberadamente resolvidas. `meeting_rsvps` e `user_challenges` podem ser lidas pelo titular/admin e escritas pelo titular; `host_prompt_votes` permite que o titular gerencie somente seu próprio voto. As contagens dos votos de anfitrião vêm de uma view agregada. Testes anônimos confirmaram que as três tabelas privadas negam acesso direto.
@@ -250,7 +259,7 @@ RLS habilitado **não significa que toda tabela tenha policy**; nesta implementa
 | `meeting-slides` | Sim | Slides dos encontros. |
 | `journal-media` | Não | Anexos do diário no diretório do titular. |
 | `chapter-extras` | Não | Extras de capítulos, leitura autenticada e escrita administrativa. |
-| `feed-media` | Sim | Mídia do feed, com upload vinculado ao autor. |
+| `feed-media` | Não | Mídia privada do feed; leitura autorizada de acordo com a visibilidade da publicação. |
 | `newsletter-assets` | Sim | Assets de newsletter, com escrita administrativa. |
 | `social-cards` | Sim | Cards compartilháveis; paths de upload usam diretório do autor. |
 | `ebooks` | Não | E-books com leitura autenticada/URLs assinadas e escrita administrativa. |
@@ -261,7 +270,7 @@ A flag público/privado do bucket não substitui as policies de `storage.objects
 
 ### 8.1 Funções SQL principais
 
-O schema contém 18 funções definidas em `public`, agrupadas por responsabilidade:
+O SDD descreve as funções de aplicação centrais abaixo; novas RPCs seguras e helpers de hardening foram acrescentados pelas migrations complementares:
 
 - **Identidade/admin:** `handle_new_user` cria profile, inicializa XP e streak; `is_admin` verifica o papel administrativo.
 - **Gamificação:** `award_xp` registra eventos e acumula XP; `touch_streak` recalcula streak a partir de atividade.
@@ -269,20 +278,22 @@ O schema contém 18 funções definidas em `public`, agrupadas por responsabilid
 - **Leitura/quiz:** `refresh_user_quiz_averages`, `refresh_chapter_quiz_averages`, `refresh_reading_goal_progress` e `generate_milestones_for_season` consolidam métricas/metas.
 - **Humor e avisos:** `refresh_book_mood_stats`, `trg_refresh_book_mood_stats` e `refresh_content_warning_votes` agregam votos.
 - **Matching:** `match_books`, `match_readers` e `get_reader_matches` suportam busca por similaridade e consulta do cache.
+- **Perfil e consentimento:** `public.get_my_profile_private()` expõe somente o perfil do JWT atual por helper estrito em `private`; `public.set_my_lgpd_consent(boolean)` opera como invoker sob RLS e atualiza o timestamp via trigger.
+- **Comunidade/privacidade:** funções internas de visibilidade alimentam `v_comments_visible` e `v_feed_posts_visible`; a projeção pública de quiz não contém `correct_idx` nem explicação.
 
-O uso de `SECURITY DEFINER` deve ser entendido como execução com privilégios do proprietário da função. As 18 funções de aplicação auditadas agora têm `search_path` fixo; chamadas de cliente às rotinas privilegiadas de XP, milestones e estatística foram revogadas/restringidas. As duas funções `SECURITY DEFINER` internas em `private` retornam apenas agregados estreitos para as views invoker. Confira grants e consumers antes de adicionar qualquer nova RPC.
+O uso de `SECURITY DEFINER` deve ser entendido como execução com privilégios do proprietário da função. As 18 funções centrais do SDD e os helpers/RPCs acrescentados foram revisados; a consulta de catálogo encontrou 32 funções em `public`/`private` com `search_path` fixo. As RPCs de perfil/consentimento expostas são `SECURITY INVOKER`; helpers privilegiados ficam em `private`, sem endpoint Data API público. Chamadas diretas de cliente a XP, milestones e estatísticas continuam revogadas/restritas. Confira grants e consumidores antes de adicionar qualquer nova RPC.
 
 ### 8.2 Triggers
 
-As 12 triggers verificadas no schema `public` incluem sincronização de contadores de comentários/feed/diário, recálculo de médias de quiz, estatísticas de humor/avisos, progresso de metas e atualização de streaks. Há ainda `on_auth_user_created` no schema `auth`, anexada a `auth.users`, para inicialização do perfil de aplicação.
+As 13 triggers verificadas no schema `public` incluem sincronização de contadores de comentários/feed/diário, recálculo de médias de quiz, estatísticas de humor/avisos, progresso de metas, atualização de streaks e geração/limpeza de `lgpd_consent_at`. Há ainda `on_auth_user_created` no schema `auth`, anexada a `auth.users`, para inicialização do perfil de aplicação.
 
 Triggers fazem trabalho dentro da transação que as dispara; falhas podem invalidar a operação original. Antes de mudar tabelas/eventos, revise função e trigger em conjunto e teste o comportamento de INSERT/UPDATE/DELETE.
 
 ### 8.3 Views implementadas
 
-As nove views públicas comuns são `v_chapter_audience`, `v_season_ranking`, `v_comments_visible`, `v_host_prompt_results`, `v_video_timed_comment_stats`, `v_user_reading_overview`, `v_feed_post_counters`, `v_book_community_stats` e `v_club_progress_panel`. Todas usam `security_invoker=true`. O materialized view `mv_book_community_stats` fica em `private`; clientes devem consumir a view pública, não o objeto interno. As duas views de agregação de progresso/votos chamam helpers em `private` que nunca retornam linhas/IDs individuais.
+As 12 views públicas comuns são `v_book_community_stats`, `v_chapter_audience`, `v_club_progress_panel`, `v_comments_visible`, `v_feed_post_counters`, `v_feed_posts_visible`, `v_host_prompt_results`, `v_profiles_public`, `v_quiz_questions_public`, `v_season_ranking`, `v_user_reading_overview` e `v_video_timed_comment_stats`. Todas usam `security_invoker=true`; as views de texto social também usam `security_barrier=true`. O materialized view `mv_book_community_stats` fica em `private`; clientes devem consumir a view pública, não o objeto interno. Agregados de progresso/votos não retornam linhas/IDs individuais.
 
-O alerta anterior de `SECURITY DEFINER` nas views foi resolvido. `security_invoker` pode reduzir linhas visíveis em comparação à execução anterior pelo proprietário da view; valide a sessão/RLS de cada consumidor antes do lançamento.
+O alerta anterior de `SECURITY DEFINER` nas views/RPCs executáveis no schema público foi resolvido. `security_invoker` pode reduzir linhas visíveis em comparação à execução anterior pelo proprietário da view; valide a sessão/RLS de cada consumidor antes do lançamento.
 
 ### 8.4 Automação do refresh de estatísticas
 
@@ -340,18 +351,18 @@ A newsletter de seed **não foi disparada**. Materiais/URLs de exemplo no seed s
 
 ## 12. Auditoria de segurança e desempenho
 
-Advisors e smoke tests foram executados depois de todas as dez migrations novas. Estado **final** observado em 8 de outubro de 2026:
+Advisors e smoke tests foram executados depois das 13 migrations novas. Estado **final** observado em 8 de outubro de 2026:
 
 | Categoria | Resultado final | Consequência prática |
 |---|---|---|
-| Views SECURITY DEFINER | 0; 9 views públicas `security_invoker=true` | View usa permissões/RLS do chamador; teste o contrato sob cada sessão. |
+| Views/RPCs SECURITY DEFINER no schema exposto | 0; 12 views públicas `security_invoker=true` | As RPCs públicas de perfil são invoker; a leitura elevada ficou em helper do schema `private`. |
 | RLS sem policy | 0 tabelas públicas | As três lacunas foram resolvidas por regras de titular/admin explicitadas. |
-| `search_path` mutável nas 18 funções de aplicação | 0 | Todas têm path fixo `pg_catalog, public`. |
+| `search_path` mutável nas 32 funções verificadas | 0 | Todas têm path fixo; os helpers privados usam referências qualificadas. |
 | FKs sem índice de cobertura | 0 / 130 FKs | Índice válido cobre cada FK; não remover em limpeza genérica. |
 | Policies com `auth.uid()` direto | 0 | Uso do initplan `(select auth.uid())` aplicado sem alterar o predicado. |
 | Extensões instaladas em `public` | 5 avisos | `vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin` permanecem; migração diferida por risco de compatibilidade. |
-| Índices sem uso observado | 108 findings `INFO` | Sem carga representativa, `idx_scan=0` não basta para justificar remoção. |
-| Múltiplas policies permissivas no modelo histórico | 215 findings | Achados por papel/ação, não por 215 tabelas; refatorar o baseline inteiro exige auditoria dedicada. Nenhuma das tabelas corrigidas nesta rodada aparece nos findings finais. |
+| Índices sem uso observado | 109 findings `INFO` | Sem carga representativa, `idx_scan=0` não basta para justificar remoção. |
+| Múltiplas policies permissivas no modelo histórico | 165 findings | Achados por papel/ação, não por 165 tabelas; a sobreposição `FOR ALL` no diário e em respostas de prompts foi separada por comando. O restante pede auditoria por domínio. |
 | Índices duplicados | 0 após migration | `vtc_sec_idx` removido; `vtc_chapter_sec_idx` equivalente mantido. |
 
 Links: [views SECURITY DEFINER](https://supabase.com/docs/guides/database/database-linter?lint=0010_security_definer_view), [RLS sem policy](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy), [`search_path` mutável](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable), [FK sem índice](https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys), [índice sem uso](https://supabase.com/docs/guides/database/database-linter?lint=0005_unused_index), [múltiplas policies](https://supabase.com/docs/guides/database/database-linter?lint=0006_multiple_permissive_policies), [duplicidade de índice](https://supabase.com/docs/guides/database/database-linter?lint=0009_duplicate_index), [extensão em public](https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public) e [auth em policies](https://supabase.com/docs/guides/database/postgres/row-level-security#call-functions-with-select).
@@ -362,9 +373,9 @@ Consulte os findings, testes HTTP e riscos restantes no [relatório de implanta�
 
 ### 13.1 Como estão organizadas as migrations
 
-Os arquivos `20260101…` são a fonte granular do baseline para revisão/recriação. O script gera seis grupos ordenados: `001_foundation`, `002_base_security_and_functions`, `003_realtime_and_storage`, `004_complement_schema`, `005_complement_security_functions_views` e `006_community_features_and_hardening`. O grupo 006 reúne as dez migrations novas; os seeds ficam separados.
+Os arquivos `20260101…` são a fonte granular do baseline para revisão/recriação. O script gera seis grupos ordenados: `001_foundation`, `002_base_security_and_functions`, `003_realtime_and_storage`, `004_complement_schema`, `005_complement_security_functions_views` e `006_community_features_and_hardening`. O grupo 006 reúne as 13 migrations complementares; os seeds ficam separados.
 
-O remoto registra **34 versões**: 24 entradas históricas `sdd_*` e dez migrations complementares `20261008…`. Os arquivos locais das dez migrations novas usam os mesmos números do histórico remoto. O baseline anterior continua com prefixos `20260101…` e não foi reconciliado para CLI.
+O remoto registra **37 versões**: 24 entradas históricas `sdd_*` e 13 migrations complementares `20261008…`. Os arquivos locais das 13 migrations novas usam os mesmos números do histórico remoto. O baseline anterior continua com prefixos `20260101…` e não foi reconciliado para CLI.
 
 ### 13.2 Regra crítica para o banco que já está implantado
 
@@ -426,14 +437,15 @@ Gere os tipos contra o projeto correto, revise o diff e confirme que não há me
 ### Já executado nesta implantação
 
 - [x] Comparar nomes de tabelas/ENUMs do SDD com migrations-fonte.
-- [x] Validar sintaxe de 53 arquivos SQL (migrations, seeds, trechos históricos e bundles) com parser PostgreSQL.
+- [x] Validar sintaxe de 56 arquivos SQL (migrations, seeds, trechos históricos e bundles) com parser PostgreSQL.
 - [x] Aplicar migrations executáveis em blocos e conferir histórico remoto.
 - [x] Confirmar 76 tabelas e RLS habilitado em todas (75 do baseline + `book_reviews`).
 - [x] Conferir contagens de policies, FKs, índices, views, triggers, Realtime e buckets.
 - [x] Aplicar seeds e conferir contagens de conteúdo.
 - [x] Executar advisors de segurança e performance após a última migration.
 - [x] Testar Data API anônima: agregados públicos retornam HTTP 200 e acesso direto a votos/RSVP/desafios retorna `42501`.
-- [x] Confirmar 9 views invoker, 18 funções com path fixo, 0 FK sem índice e 0 policy com `auth.uid()` direto.
+- [x] Confirmar 12 views invoker, 32 funções com path fixo, 0 FK sem índice e 0 policy com `auth.uid()` direto.
+- [x] Executar smoke test PGlite das três migrations finais: PII, spoilers, quiz, owner/lista, membership, level e consentimento com timestamp.
 - [x] Habilitar `pg_cron`, agendar refresh de `private.mv_book_community_stats` a cada 6 horas e validar manualmente o refresh concorrente.
 - [x] Criar seeds de reviews/clube para dev, sem aplicá-los ao banco remoto (nenhum perfil/admin estava presente).
 - [x] Confirmar que o repositório público não contém padrões de chaves literais na varredura realizada.
@@ -478,19 +490,23 @@ O documento [`docs/implementation-plan.md`](./docs/implementation-plan.md) é o 
    Os seeds opcionais de review/clube foram criados para dev e não aplicados em produção, que ainda não tem perfis.
 4. Definir ownership/admin para RSVP e desafios e manter votos individuais privados; publicar apenas agregados.
 5. Criar views comunitárias, MV privado e snapshot invoker com validação do titular.
-6. Harden de 9 views, 18 `search_path`s e grants nas rotinas privilegiadas; separar o cliente service-role do cliente com JWT na fonte `quiz-validate`.
+6. Harden das views (12 `security_invoker=true`) e dos `search_path`s fixos (32 objetos verificados), grants das rotinas privilegiadas e separação do cliente service-role/JWT na fonte `quiz-validate`.
 7. Adicionar índices às 130 FKs sem cobertura, otimizar `auth.uid()` e consolidar policies novas sem sobreposição permissiva.
 8. Tirar o MV de `public` e remover a cópia exata de um índice, conservando o índice equivalente.
 9. Habilitar `pg_cron` e agendar o refresh concorrente do MV privado a cada seis horas; testar o refresh manual e conferir o job ativo.
 10. Criar contrato documental das Edge Functions e seeds idempotentes apenas para desenvolvimento; não criar cron de reminders sem endpoint seguro.
 11. Testar sintaxe, catálogo, views e controles Data API anônimos; atualizar bundles, status, blockers e README.
+12. Restringir leitura direta de PII, respostas de quiz, conteúdo de spoiler e mídias privadas; preservar somente as views seguras do contrato.
+13. Impedir autoelevação de `role` em `user_club_members`, bloquear edição de `profiles.level`, separar policies de diário/respostas por comando SQL e validar membership do clube.
+14. Mover o helper privilegiado de perfil para `private`, converter RPCs públicas para `SECURITY INVOKER` e fazer o banco gerar/limpar o timestamp de consentimento LGPD.
+15. Aplicar as três migrations ao Supabase, testar em PostgreSQL WASM, conferir grants/triggers/advisors remotos e alinhar bundles e documentação.
 
 ### Compatibilidade e riscos residuais
 
 - DDL aditivo: nenhuma tabela/coluna existente foi apagada ou renomeada e nenhum dado de usuário foi migrado ou excluído.
 - Contratos existentes de leitura podem retornar menos linhas porque as views agora observam as policies do chamador; esse é o comportamento seguro esperado, mas consumidores devem ser validados.
 - `award_xp` não deve ser chamado diretamente do navegador: `EXECUTE` foi restrito a `service_role`. A função `quiz-validate` no repositório separa o cliente de request e o cliente privilegiado, porém **nenhuma Edge Function foi implantada**.
-- Os testes HTTP anônimos cobrem leituras públicas e negação de dados privados; não simulam duas identidades autenticadas nem fluxo admin.
+- A suíte PGlite aplica as três migrations e simula `anon`/`authenticated` com claims JWT de dois usuários, cobrindo negações e os caminhos positivos de titular/owner. Ela não substitui um teste de integração com Supabase Auth real, branch remota, Storage API ou Edge Functions.
 - Extensões em `public`, múltiplas policies históricas e índices sem tráfego representativo permanecem explicitamente registrados no [relatório final](./docs/deployment-status.md).
 - O histórico baseline continua incompatível com `supabase db push`; os seis bundles são material de revisão/bootstrap, não autorização para reaplicar ao projeto existente. A migration de repair do anexo foi deliberadamente adiada: os 24 registros históricos já existem e inseri-los novamente não reconcilia os arquivos `20260101…`.
 
@@ -507,6 +523,9 @@ for path in files:
 print(f"SQL válido: {len(files)} arquivos")
 PY
 git diff --check
+npm --prefix scripts/security-smoke ci
+npm --prefix scripts/security-smoke test
+npx --yes deno check supabase/functions/quiz-validate/index.ts
 ```
 
-Para validar o estado remoto, use as consultas read-only em [`supabase/security-audit.sql`](./supabase/security-audit.sql) e reexecute os advisors; consulte a API somente com requests GET em ambiente de verificação.
+Para validar o estado remoto, use as consultas read-only em [`supabase/security-audit.sql`](./supabase/security-audit.sql) e reexecute os advisors; teste Data API com GET e com contas isoladas. O conjunto de migrations do projeto atual **não deve ser reaplicado com CLI** até reconciliar o baseline histórico `sdd_*`.

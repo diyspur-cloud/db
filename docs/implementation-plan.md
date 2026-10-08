@@ -79,13 +79,13 @@ Arquivo: `supabase/migrations/20261008214920_add_community_reading_views.sql`.
 
 Arquivo: `supabase/migrations/20261008215324_harden_community_data_access.sql` move o materialized view para `private`. A API deve consumir `public.v_book_community_stats`, não consultar o detalhe interno diretamente.
 
-**Critério de aceite:** 9 views públicas comuns com `security_invoker=true`; 1 materialized view no schema interno; agregações consultáveis sem liberar votos individuais; função de snapshot sem execução por `anon`.
+**Critério do marco original:** habilitar `security_invoker=true` em todas as views públicas comuns então existentes; manter 1 materialized view no schema interno; expor agregações sem liberar votos individuais; impedir execução do snapshot por `anon`. Migrations posteriores ampliaram o total final a 12 views públicas seguras.
 
 ### Etapa 5 — Hardening das views, funções e privilégios
 
 Arquivo: `supabase/migrations/20261008215009_harden_views_and_functions.sql`.
 
-1. Fixar o `search_path` nas 18 funções de aplicação identificadas.
+1. Fixar o `search_path` nas 18 funções centrais inicialmente identificadas; hardening posterior adicionou wrappers/helpers, chegando a 32 funções catalogadas com path fixo em `public`/`private`.
 2. Aplicar `security_invoker=true` nas 7 views existentes e nas 2 views novas, totalizando 9.
 3. Revogar `EXECUTE` de roles de cliente nas funções privilegiadas de XP, milestones e atualização de estatística de humor; conceder as chamadas administrativas necessárias a `service_role`.
 4. Restringir funções internas/trigger-only que não devem ser chamadas diretamente por usuários.
@@ -144,9 +144,9 @@ Arquivo: `supabase/migrations/20261008220410_schedule_book_stats_refresh.sql`.
 
 ### Testes estáticos e reprodutibilidade
 
-- Parser PostgreSQL `pglast` nos arquivos SQL versionados: migrations, seeds, trechos arquivados e bundles gerados; foram validados 53 arquivos SQL sem erro.
+- Parser PostgreSQL `pglast` nos arquivos SQL versionados: migrations, seeds, trechos arquivados e bundles gerados; foram validados 56 arquivos SQL sem erro.
 - `git diff --check` para whitespace/patches.
-- Executar `python3 scripts/build-remote-bundles.py` e verificar seis bundles/manifests, com o grupo 006 contendo as dez migrations complementares na ordem registrada.
+- Executar `python3 scripts/build-remote-bundles.py` e verificar seis bundles/manifests, com o grupo 006 contendo as 13 migrations complementares na ordem registrada.
 
 ### Smoke tests do catálogo Supabase
 
@@ -176,8 +176,8 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 
 ### Advisors após a última migration
 
-- **Segurança:** permanece o aviso de 5 extensões em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Não há mais aviso de view SECURITY DEFINER nem do MV exposto pela Data API no resultado final.
-- **Performance:** 108 índices com `idx_scan = 0` (inclui índices novos e históricos; não remover sem medir carga), 215 achados do linter de múltiplas policies permissivas herdadas do modelo original. As novas policies consolidadas não aparecem nessas findings. Aviso de índice duplicado: zero após a remoção da cópia exata.
+- **Segurança:** permanece apenas o aviso de 5 extensões em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Não há aviso de SECURITY DEFINER exposto/callable no schema `public`, nem do MV exposto pela Data API.
+- **Performance:** 109 índices com `idx_scan = 0` (inclui índices novos e históricos; não remover sem medir carga), 165 findings do linter de múltiplas policies permissivas herdadas do modelo original. As policies de membership, diário e respostas de prompts corrigidas não aparecem nos findings. Aviso de índice duplicado: zero.
 
 ## 5. Estado de aceite
 
@@ -189,7 +189,8 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 - [x] MV interno, policies novas sem sobreposição permissiva e remoção do índice duplicado.
 - [x] pg_cron ativo para refresh concorrente a cada seis horas; refresh manual validado.
 - [x] Smoke tests read-only pelo banco e pela Data API anônima.
-- [ ] Testar leitura/escrita com contas autenticadas de titular e de admin em ambiente isolado.
+- [x] Smoke test PGlite das três migrations finais com claims `anon`/`authenticated`, dois titulares, owner de clube, negações e caminhos permitidos para perfil/consentimento.
+- [ ] Testar leitura/escrita com contas Supabase Auth reais de titular e admin em branch/projeto isolado.
 - [ ] Atualizar e reconciliar o SDD, que ainda não descreve integralmente `book_reviews` e o contexto em `user_clubs`.
 - [ ] Validar consumidores externos do RPC `award_xp` após a revogação de execução direta.
 - [ ] Fazer auditoria dos endpoints/ownership e secrets antes de implantar qualquer Edge Function.
@@ -202,7 +203,7 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 
 As migrations foram desenhadas para preservar linhas existentes, mas DDL não é automaticamente reversível. **Não** faça rollback destrutivo de `book_reviews`, colunas de `user_clubs` ou índices em produção sem verificar se o aplicativo já começou a gravar/ler esses objetos.
 
-**Registro desta execução:** nenhum backup ou restore point manual foi criado antes do deploy. Nenhuma linha existente foi apagada ou reescrita; para novas mudanças estruturais, crie e valide um restore point e prefira ambiente isolado.
+**Registro desta execução:** nenhum backup ou restore point manual foi criado antes do deploy. Nenhuma linha foi apagada; a migration de autorização preencheu `comments.min_percent` apenas para linhas legadas nulas (`100` se spoiler, `0` caso contrário). Não houve inserção de linhas de usuário. Para novas mudanças estruturais, crie e valide um restore point e prefira ambiente isolado.
 
 - Se uma view/ACL causar regressão, preferir migration corretiva para ajustar grants/contract, mantendo RLS habilitado.
 - Se uma aplicação depender do RPC `award_xp` direto, redirecionar para serviço de backend validado; não restaurar indiscriminadamente `EXECUTE` para `anon`/`authenticated`.
@@ -212,7 +213,7 @@ As migrations foram desenhadas para preservar linhas existentes, mas DDL não é
 
 ## 7. Migrations remotas deste plano
 
-As dez migrations registradas para esta implementação são:
+As 13 migrations registradas para esta implementação são:
 
 1. `20261008214832 add_book_reviews`
 2. `20261008214847 add_user_club_reading_context`
@@ -224,15 +225,76 @@ As dez migrations registradas para esta implementação são:
 8. `20261008215324 harden_community_data_access`
 9. `20261008215751 drop_duplicate_video_timed_comments_index`
 10. `20261008220410 schedule_book_stats_refresh`
+11. `20261008225152 harden_core_authorization`
+12. `20261008225535 prevent_client_privilege_escalation`
+13. `20261008225856 encapsulate_profile_consent_privilege`
 
-Os nomes/versões acima foram confirmados no histórico remoto e espelhados nos arquivos do repositório. O histórico baseline anterior permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. O total final remoto é 34 migrations (24 históricas + 10 novas).
+Os nomes/versões acima foram confirmados no histórico remoto e espelhados nos arquivos do repositório. O histórico baseline anterior permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. O total final remoto é 37 migrations (24 históricas + 13 novas).
 
 ## 8. Decisões de escopo e itens do anexo adiados
 
-A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As dez migrations novas estão versionadas com as versões remotas exatas; baseline antigo segue bloqueado para `db push`.
+A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As 13 migrations novas estão versionadas com as versões remotas exatas; baseline antigo segue bloqueado para `db push`.
 
 As cinco extensões em `public` foram mantidas. O endpoint de branches do Supabase não listou um ambiente isolado; sem branch de teste, mover extensões que fornecem tipos e operadores pode quebrar colunas, índices, RPCs ou search path. A pendência fica para uma mudança futura com cópia/restauração e validação de dependências.
 
 O job de refresh da MV foi implementado. O cron HTTP de `scheduled-reminders` não foi criado porque a Edge Function não está implantada e não há credencial de serviço configurada; um job horário sem autenticação produziria falhas recorrentes. O contrato de autorização está documentado em `docs/edge-functions-authorization.md`.
 
 Seeds idempotentes de review/clube foram criados sob `supabase/dev-seeds/`, mas não foram aplicados ao projeto remoto: a auditoria encontrou zero perfis e zero admins. Não foram inseridos dados de amostra. Nenhuma Edge Function foi implantada, conforme o escopo do anexo. A validação RLS com duas sessões JWT reais continua necessária em ambiente isolado.
+
+
+## 9. Plano de desenvolvimento ponta a ponta — próximos passos
+
+As migrations 1–13 deste documento estão no Supabase e versionadas. O plano abaixo é a sequência de produto ainda necessária para transformar o banco preparado numa aplicação implantável. **Não pule as gates de ambiente isolado e autorização real.** Esta etapa não autoriza `supabase db push` contra o projeto existente: o baseline `sdd_*` ainda diverge dos arquivos granulares locais `20260101…`.
+
+### 9.1 Estado de saída desta rodada
+
+- **Concluído:** auditoria de schema/RLS/views/Storage/Realtime/cron/advisors; migrations incrementais; hardening de dados pessoais, quiz, spoilers, clube e consentimento; bundle/manifests; README e status; parser SQL, Deno type-check e smoke PGlite.
+- **Ainda não concluído:** reconciliação do SDD/histórico CLI, teste autenticado com Supabase Auth real, integração do frontend, tipos gerados, deploy de Edge Functions, secrets, pipelines e liberação para usuários.
+- **Regra de mudança:** toda alteração futura segue `especificar → criar migration → testar localmente → testar isolado com JWT real → aplicar controladamente → verificar catálogo/API/logs → documentar`. Sem teste positivo e negativo do papel adequado, não libere escrita.
+
+### 9.2 Sequência de implementação
+
+| Fase | Trabalho e ordem recomendada | Evidência/critério para avançar |
+|---|---|---|
+| 0. Alinhar contrato do produto | Atualizar `SDDBD2.md` com `book_reviews`, os quatro campos de leitura de `user_clubs`, ownership de cada recurso, níveis de privacidade, campos pessoais, tratamento de spoilers, quiz server-authoritative, consentimento e papel/role. Registrar explicitamente decisões sobre `public.clubs` versus `user_clubs` e o que é público, autenticado, titular, membro de clube ou admin. | Matriz entidade × ação × role aprovada; cada endpoint/tabela tem owner e regra de visibilidade; nenhum item depende de pressuposto implícito.
+| 1. Criar staging e reconciliar histórico | Obter backup/restore point do projeto; criar branch Supabase ou projeto descartável; comparar schema remoto, `supabase_migrations.schema_migrations`, arquivos e bundles; produzir plano de baseline/repair revisável. Usar ferramenta/fluxo compatível com o histórico `sdd_*`; validar todas as migrations numa base limpa e provar que o plano incremental não recria objetos. | Restore point verificável; diff remoto/local explicado; replay em projeto limpo conclui; reconciliar CLI em ambiente separado; só então remover o bloqueio formal de `db push`.
+| 2. Preparar aplicação e tipos | Definir `supabase/config.toml`, lockfile/dependências e ambiente local; gerar `src/lib/supabase/database.types.ts` contra o schema correto; revisar enums, RPCs, views, colunas nullable e diferenças entre base e complementos. Guardar publishable key apenas nas variáveis públicas esperadas e qualquer secret somente no servidor; nunca commitar `.env` nem `service_role`. | Build/tipos compilam; busca por chave/token/dados de usuário não encontra segredos; SSR/browser/server usam clientes separados e tipos atualizados.
+| 3. Auth, perfil e consentimento | Implementar signup/login/logout/refresh com `@supabase/ssr`; tratar ausência/expiração de sessão sem fallback de privilégio. Criar perfil de onboarding com campos públicos vindos de `v_profiles_public`, PII apenas pela RPC própria, consentimento pela RPC `set_my_lgpd_consent`, timestamp apenas gerado pelo banco, e `role`/`level` somente leitura para cliente. | Com 2 contas reais: cada conta lê só sua PII/consentimento; tentativa de ler whatsapp alheio, atualizar role/level/timestamp ou chamar RPC anônima falha; consentimento on/off tem timestamp correto e auditoria documentada.
+| 4. Catálogo, progresso e discussão sem spoilers | Integrar livros/temporadas/capítulos; gravar progresso apenas sob owner/JWT válido; consumir `v_comments_visible` e `v_feed_posts_visible`, nunca selecionar corpo sensível diretamente. Fixar significado e origem confiável do percentual/progresso; confirmar que o mecanismo não permite desbloquear spoiler por update arbitrário fora das rules de progresso do contrato. | Teste A/B com progresso abaixo/igual/acima do limite; `content`, `body`, `quote_text` e metadados ocultos até a condição; exclusão lógica e paginação não quebram filtros.
+| 5. Quiz authoritative e XP | Conectar a UI somente à projeção `v_quiz_questions_public`; retirar fetch direto de `quiz_questions.correct_idx`/explicação. Antes de deployar `quiz-validate`, substituir seu pre-check de rate limit (não atômico sob concorrência) por limite atômico no banco/gateway; validar que o caller tem acesso ao capítulo; fazer tentativa e atribuição de XP idempotentes; configurar secrets. `award_xp` deve ser chamado exclusivamente com cliente service-role no backend e só após resposta válida. | Resposta correta não aparece em payload cliente; tentativas são persistidas sem insert direto do usuário; replay, chapter errado, body malformado, flood concorrente e chamada de capítulo não autorizado são negados; XP é atribuído exatamente uma vez.
+| 6. Clubes, feed e relações | Implementar criação/edição de clubes e membership; self-join somente `member`; owner atribui moderador/owner conforme a matriz aprovada; testar clube público/privado e remoção de membro. Implementar feed, mídia, follows, comentários, likes, listas e colaboração usando ownership e visibilidade; o bucket `feed-media` é privado e deve usar URLs assinadas/endpoint autorizado em vez de URL pública. | Titular/owner/reader não membro/admin testados entre si; users não leem nem alteram linhas de terceiro; upload/download de mídia segue visibilidade do post; políticas de colaboração não permitem modificar owner/lista de outro usuário.
+| 7. Diário e conteúdo de capítulo | Conectar `reading_journal_entries`, anexos e `chapter_prompt_responses` às suas policies separadas por operação; testar combinações `private`, `friends`, `club`, `public`, reciprocity de follow e participação em clube. Validar se o contrato de grupo permite ver só campos/textos autorizados. | Casos de isolamento com titular, follower unilateral, friends recíprocos, membro/não membro e admin; anexo privado sem acesso cross-user; exclusão/soft-delete e update de owner testados.
+| 8. Storage, Realtime e cron | Inventariar cada bucket, confirmar bucket público/privado e cada policy de `storage.objects`, limites/tamanho/MIME e prefixo de path. Validar tabela por tabela a publicação `supabase_realtime` e payload sem PII desnecessária. Revisar o job ativo do refresh; somente criar `scheduled-reminders` após endpoint implantado com auth de serviço, timeout/retry e observabilidade. | Teste upload/download/remove como anon, dono, colaborador e admin; canais Realtime não revelam dados privados a espectadores; jobs têm runbook, idempotência, health/alarm e plano de pausa.
+| 9. Integrações externas e operações server-side | Para `ai-user-embeddings`, vincular `user_id` ao JWT ou proibir cálculo cruzado; definir expurgo/retenção de embeddings. Revisar Resend/newsletter, Stripe/webhooks e provedores externos: assinatura de webhook, duplicidade/idempotência, mínimo de dados, autorização admin, rate-limit e tratamento de erros. Definir secrets em ambiente Supabase e rotação sem expor valores. | Testes com secrets de staging; assinaturas/replay inválidos negados; logs sem payload sensível; não há chamada administrativa possível a partir do navegador.
+| 10. Remediar findings sem regressão | Avaliar as cinco extensões em `public` em branch: dependências de tipo, operadores, casts, funções, índices e search path antes de mover. Triar os 165 findings `multiple_permissive_policies` por tabela/role/command e semântica OR das policies; decidir explicitamente quais são intencionais, quais reduzem performance e quais mudam autorização. Investigar os 109 `unused_index` somente com observação de carga suficiente. | Cada finding tem owner, risco, query/plano antes e depois e teste de regressão; nenhum índice crítico é removido por `idx_scan=0` isolado; advisor limpo não é critério único de segurança.
+| 11. Testes de integração e release candidate | Adicionar testes SQL/pgTAP no Supabase local ou branch; incluir anon/auth A/B, titular/admin/owner, Data API REST, RPC, Edge Functions, Storage e Realtime. Rodar unit/integration, Deno, migrations do zero, type-generation diff e verificações de secrets. Comparar o projeto isolado com o inventário de 76 tabelas, 155 policies, 12 views, FKs/índices, funções e triggers. | Pipeline CI reproduzível passa em ambiente limpo; cobertura inclui sucesso e negação; nenhuma migration fica faltando; regressões de API e performance são revisadas/aprovadas.
+| 12. Lançamento, monitoramento e recuperação | Com backup/restore point, janela e owner de aprovação definidos, aplicar migrations novas uma a uma pelo método compatível com o histórico já reconciliado. Verificar catálogo/histórico, grants, policies, advisors, Data API, função, Storage e cron imediatamente; acompanhar logs/erros/latência. Se houver falha, aplicar migration corretiva aditiva; restaurar backup somente conforme playbook testado, não usar `db reset`. | Checklist de release assinado; versão remota = versão de Git; alarmes e runbook ativos; rollback/forward-fix demonstrado em staging; suporte sabe pausar jobs/canais e rotacionar secrets.
+
+### 9.3 Matriz mínima de autorização para testes reais
+
+| Ator de teste | Deve poder | Deve ser negado |
+|---|---|---|
+| `anon` | Conteúdo explicitamente público, views agregadas e perfil público sanitizado | PII, linhas pessoais, mídia privada, respostas de quiz, tentativas e RPCs de escrita |
+| Titular A | Ler/alterar só perfil, consentimento, progresso e recursos que possui; acessar conteúdo compatível com seu progresso | PII/diário/listas/membership/tentativas de B; `role`, `level` ou timestamp definidos pelo cliente |
+| Titular B (não relacionado) | Acesso público e próprios recursos | Feed/diário/lista/consentimento de A e clube privado de A |
+| Follower | Conteúdo de amizade somente quando a relação e visibilidade satisfazem o contrato | Leitura por follow unilateral se o recurso exige reciprocidade |
+| Membro de clube | Conteúdo e mídia do clube no qual participa | Conteúdo de clube privado sem membership; promover a si mesmo a owner/moderator |
+| Owner/moderador | Gerir apenas clube próprio e operações atribuídas pelo SDD | Alterar owner de clube alheio, administrar outra tenancy ou conceder papel arbitrário |
+| Admin | Operações de suporte/admin explicitamente documentadas e auditáveis | Bypass implícito de consentimento, exposição sem necessidade ou uso do secret no cliente |
+| `service_role` | Rotinas server-side necessárias com privilégio mínimo operacional | Uso em frontend, logs, código público ou endpoint sem validação do usuário e finalidade |
+
+Para cada linha, registrar query/endpoint, identity/JWT, resultado esperado, resultado observado, status HTTP/SQLSTATE e se a tentativa foi feita por Data API ou Postgres. PGlite já cobre uma amostra automatizada, mas o gate de produção exige reproduzir a matriz com contas isoladas de Supabase Auth.
+
+### 9.4 Definition of Done antes de liberar produção
+
+- [ ] SDD, README, migrations e tipos gerados descrevem o mesmo contrato.
+- [ ] Histórico baseline foi reconciliado sem recriar nem apagar objetos remotos.
+- [ ] CI aplica todas as migrations desde banco vazio; branch isolada valida migrations incrementais.
+- [ ] Cada tabela exposta possui RLS; roles/policies/grants e nomes de RPC foram revisados; nenhum cliente usa `service_role`.
+- [ ] A matriz de anon/titular/follower/member/owner/admin/service-role tem testes positivos e negativos com Auth real.
+- [ ] PII, quiz, spoilers, consentimento, Storage, Realtime, webhooks, cron e Edge Functions foram validados em staging.
+- [ ] Secrets, backups, alertas, logging sem PII, rate limits, expiração de URLs e playbook de incidentes estão prontos.
+- [ ] Os findings Supabase têm triagem escrita; riscos remanescentes têm decisão explícita, owner e prazo.
+- [ ] Checklist de deploy/forward-fix e verificação pós-deploy foi executado por pessoa responsável.
+
+Até estes gates passarem, o estado correto é **banco endurecido e documentado; aplicação e integrações ainda não prontas para produção**.
