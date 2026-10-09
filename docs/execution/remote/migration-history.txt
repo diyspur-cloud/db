@@ -1,0 +1,4 @@
+Tool execution result saved to: /home/ubuntu/.mcp/tool-results/2026-10-09_02-51-35.828538236_supabase_execute_sql_3d9cbdd4.json
+MCP structured result captured for host processing.
+Tool execution result summary:
+MCP tool returned a structured result. The complete result was captured for host processing.

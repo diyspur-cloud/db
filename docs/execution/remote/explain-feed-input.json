@@ -1,0 +1,1 @@
+{"project_id": "xjhehhfhhoomblcggjpk", "query": "explain (analyze,buffers,format json) select id,author_id,visibility,created_at from public.feed_posts where visibility='public' and deleted_at is null order by created_at desc limit 30"}

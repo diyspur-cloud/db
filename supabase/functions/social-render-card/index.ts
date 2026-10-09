@@ -82,16 +82,17 @@ Deno.serve(async (req) => {
       ? payload.text.slice(0, 500)
       : "Uma boa história merece ser compartilhada.";
     const service = serviceClient();
-    const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
-    const { count, error: countError } = await service.from(
-      "social_render_jobs",
-    )
-      .select("id", { count: "exact", head: true }).eq("user_id", user.id).gte(
-        "created_at",
-        since,
-      );
-    if (countError) return json({ error: "temporarily_unavailable" }, 503);
-    if ((count ?? 0) >= 10) return json({ error: "daily_limit_reached" }, 429);
+    const { data: allowed, error: rateError } = await service.rpc(
+      "take_rate_limit",
+      {
+        p_user: user.id,
+        p_bucket: "social-render-card",
+        p_limit: 10,
+        p_window_seconds: 24 * 60 * 60,
+      },
+    );
+    if (rateError) return json({ error: "temporarily_unavailable" }, 503);
+    if (allowed !== true) return json({ error: "daily_limit_reached" }, 429);
 
     const { data: job, error: jobError } = await service.from(
       "social_render_jobs",
@@ -99,7 +100,7 @@ Deno.serve(async (req) => {
       .insert({
         user_id: user.id,
         kind: input.kind,
-        payload: { title, quote },
+        payload,
         status: "queued",
       })
       .select("id").single();
@@ -122,14 +123,27 @@ Deno.serve(async (req) => {
     }
     const { data: publicUrl } = service.storage.from("social-cards")
       .getPublicUrl(path);
-    const { error: updateError } = await service.from("social_render_jobs")
+    const { data: renderedJob, error: updateError } = await service.from(
+      "social_render_jobs",
+    )
       .update({
         status: "rendered",
         image_url: publicUrl.publicUrl,
         rendered_at: new Date().toISOString(),
-      }).eq("id", job.id).eq("user_id", user.id);
-    if (updateError) return json({ error: "render_state_update_failed" }, 503);
-    return json({ ok: true, job_id: job.id, image_url: publicUrl.publicUrl });
+      }).eq("id", job.id).eq("user_id", user.id)
+      .select(
+        "id,user_id,kind,payload,status,image_url,error,created_at,rendered_at",
+      )
+      .single();
+    if (updateError || !renderedJob) {
+      return json({ error: "render_state_update_failed" }, 503);
+    }
+    return json({
+      ok: true,
+      job: renderedJob,
+      job_id: renderedJob.id,
+      image_url: renderedJob.image_url,
+    });
   } catch (error) {
     console.error(
       "social-render-card: request failed",

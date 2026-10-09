@@ -1,0 +1,211 @@
+{
+  "observed_at": "2026-10-09T02:52:26.803696+00:00",
+  "project": "https://xjhehhfhhoomblcggjpk.supabase.co",
+  "method": "GET; sem identidade de usuário",
+  "results": [
+    {
+      "path": "/rest/v1/buddy_reads?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"buddy_reads\""
+      }
+    },
+    {
+      "path": "/rest/v1/buddy_read_members?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"buddy_read_members\""
+      }
+    },
+    {
+      "path": "/rest/v1/buddy_read_checkpoints?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"buddy_reads\""
+      }
+    },
+    {
+      "path": "/rest/v1/reading_lists?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"reading_lists\""
+      }
+    },
+    {
+      "path": "/rest/v1/reading_list_collaborators?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"reading_list_collaborators\""
+      }
+    },
+    {
+      "path": "/rest/v1/reading_list_items?select=*&limit=0",
+      "status": 500,
+      "body": {
+        "code": "42P17",
+        "details": null,
+        "hint": null,
+        "message": "infinite recursion detected in policy for relation \"reading_list_collaborators\""
+      }
+    },
+    {
+      "path": "/rest/v1/rpc/is_admin",
+      "status": 401,
+      "body": {
+        "code": "42501",
+        "details": null,
+        "hint": "Grant the required privileges to the current role with: GRANT SELECT ON public.profiles TO anon;",
+        "message": "permission denied for table profiles"
+      }
+    },
+    {
+      "path": "/rest/v1/v_book_community_stats?select=mood_percent,sample_size,ratings_count,avg_spice_level&limit=0",
+      "status": 400,
+      "body": {
+        "code": "42703",
+        "details": null,
+        "hint": null,
+        "message": "column v_book_community_stats.mood_percent does not exist"
+      }
+    },
+    {
+      "path": "/rest/v1/v_club_progress_panel?select=finished_count,reading_count,not_started_count&limit=0",
+      "status": 400,
+      "body": {
+        "code": "42703",
+        "details": null,
+        "hint": null,
+        "message": "column v_club_progress_panel.finished_count does not exist"
+      }
+    },
+    {
+      "path": "/auth/v1/settings",
+      "status": 200,
+      "body": {
+        "external": {
+          "anonymous_users": false,
+          "apple": false,
+          "azure": false,
+          "bitbucket": false,
+          "discord": false,
+          "facebook": false,
+          "snapchat": false,
+          "figma": false,
+          "fly": false,
+          "github": false,
+          "gitlab": false,
+          "google": false,
+          "keycloak": false,
+          "kakao": false,
+          "linkedin": false,
+          "linkedin_oidc": false,
+          "notion": false,
+          "spotify": false,
+          "slack": false,
+          "slack_oidc": false,
+          "workos": false,
+          "twitch": false,
+          "twitter": false,
+          "email": true,
+          "phone": false,
+          "zoom": false
+        }
+      }
+    },
+    {
+      "path": "/functions/v1/quiz-validate",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/award-xp",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/vote-next-book",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/scheduled-reminders",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/ai-recommendations",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/ai-user-embeddings",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/match-readers",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/newsletter-dispatch",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/stripe-webhook",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    },
+    {
+      "path": "/functions/v1/social-render-card",
+      "status": 404,
+      "body": {
+        "code": "NOT_FOUND",
+        "message": "Requested function was not found"
+      }
+    }
+  ]
+}

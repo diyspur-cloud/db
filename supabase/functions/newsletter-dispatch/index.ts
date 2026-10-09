@@ -29,13 +29,22 @@ async function audienceKey(value: unknown): Promise<string> {
   ).join("");
 }
 
+// Decisão contratual explícita: tags/frequency do seed são aceitas e
+// validadas para compatibilidade, mas não restringem a audiência. O despacho
+// sempre considera todos os inscritos confirmados não cancelados.
+const NEWSLETTER_AUDIENCE = "todos_confirmados" as const;
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  let service: ReturnType<typeof serviceClient> | null = null;
+  let claimedIssueId: string | null = null;
+  let claimedAudienceKey: string | null = null;
+  let claimedToken: string | null = null;
   try {
     const user = await requestUser(req);
     if (!user) return json({ error: "unauthorized" }, 401);
-    const service = serviceClient();
+    service = serviceClient();
     if (!await isAdmin(user.id, service)) {
       return json({ error: "forbidden" }, 403);
     }
@@ -65,7 +74,12 @@ Deno.serve(async (req) => {
       return json({ error: "invalid_audience_filter" }, 422);
     }
     const filterObject = filter as Record<string, unknown>;
-    const allowedKeys = new Set(["frequency", "tags_any", "tags_all"]);
+    const allowedKeys = new Set([
+      "frequency",
+      "tags_any",
+      "tags_all",
+      "tags",
+    ]);
     if (Object.keys(filterObject).some((key) => !allowedKeys.has(key))) {
       return json({ error: "unsupported_audience_filter" }, 422);
     }
@@ -77,7 +91,7 @@ Deno.serve(async (req) => {
     ) {
       return json({ error: "invalid_audience_filter" }, 422);
     }
-    for (const key of ["tags_any", "tags_all"] as const) {
+    for (const key of ["tags_any", "tags_all", "tags"] as const) {
       if (
         filterObject[key] !== undefined && (!Array.isArray(filterObject[key]) ||
           (filterObject[key] as unknown[]).length > 50 ||
@@ -94,25 +108,38 @@ Deno.serve(async (req) => {
       return json({ error: "newsletter_provider_unavailable" }, 503);
     }
     const resend = new Resend(resendKey);
-    const key = await audienceKey(filter);
-    const { data: claimed, error: claimError } = await service.rpc(
-      "claim_newsletter_dispatch",
+    // Filtros ignorados não podem criar leases concorrentes da mesma audiência.
+    const key = await audienceKey({ audience: NEWSLETTER_AUDIENCE });
+    const { data: claimToken, error: claimError } = await service.rpc(
+      "claim_newsletter_dispatch_token",
       {
         p_issue: issueId,
         p_audience_key: key,
       },
     );
-    if (claimError || claimed !== true) {
+    if (
+      claimError || typeof claimToken !== "string" || !UUID_RE.test(claimToken)
+    ) {
       return json({ error: "dispatch_already_claimed" }, 409);
     }
-    const { data: priorDeliveries, error: deliveryReadError } = await service
-      .from("newsletter_deliveries")
-      .select("subscriber_id").eq("issue_id", issueId).eq("status", "sent")
-      .limit(10_000);
-    if (deliveryReadError) throw deliveryReadError;
-    const alreadySent = new Set(
-      (priorDeliveries ?? []).map((row) => row.subscriber_id),
-    );
+    // Keep these outside the main try body so an exception after the claim can
+    // make a best-effort finalization attempt in catch.  They are assigned only
+    // after this request has positively acquired the claim.
+    claimedIssueId = issueId;
+    claimedAudienceKey = key;
+    claimedToken = claimToken;
+    const alreadySent = new Set<string>();
+    for (let offset = 0;; offset += 500) {
+      const { data: priorDeliveries, error: deliveryReadError } = await service
+        .from("newsletter_deliveries")
+        .select("subscriber_id").eq("issue_id", issueId).eq("status", "sent")
+        .order("subscriber_id").range(offset, offset + 499);
+      if (deliveryReadError) throw deliveryReadError;
+      for (const row of priorDeliveries ?? []) {
+        alreadySent.add(row.subscriber_id);
+      }
+      if (!priorDeliveries || priorDeliveries.length < 500) break;
+    }
     const recipients: Array<
       {
         id: string;
@@ -128,20 +155,17 @@ Deno.serve(async (req) => {
           "unsubscribed_at",
           null,
         )
+        .order("id")
         .range(offset, offset + 499);
       if (error) throw error;
-      recipients.push(...(data ?? []).filter((subscriber) => {
-        if (alreadySent.has(subscriber.id)) return false;
-        if (
-          filterObject.frequency &&
-          subscriber.frequency !== filterObject.frequency
-        ) return false;
-        const tags = new Set(subscriber.tags ?? []);
-        const any = (filterObject.tags_any as string[] | undefined) ?? [];
-        const all = (filterObject.tags_all as string[] | undefined) ?? [];
-        return (!any.length || any.some((tag) => tags.has(tag))) &&
-          all.every((tag) => tags.has(tag));
-      }));
+      // `NEWSLETTER_AUDIENCE` é deliberadamente literal: não aplicar tags,
+      // tags_any, tags_all ou frequency sobre os confirmados.
+      if (NEWSLETTER_AUDIENCE !== "todos_confirmados") {
+        throw new Error("unsupported_newsletter_audience_mode");
+      }
+      recipients.push(
+        ...(data ?? []).filter((subscriber) => !alreadySent.has(subscriber.id)),
+      );
       if (!data || data.length < 500) break;
     }
 
@@ -159,7 +183,7 @@ Deno.serve(async (req) => {
           subject: issue.subject,
           html,
           headers: { "X-Entity-Ref-ID": `${issueId}:${recipient.id}` },
-        });
+        }, { idempotencyKey: `newsletter/${issueId}/${recipient.id}` });
         if (error) failure = error.message.slice(0, 500);
         else messageId = data?.id;
       } catch (error) {
@@ -188,11 +212,12 @@ Deno.serve(async (req) => {
       }
     }
     const { error: finishError } = await service.rpc(
-      "finish_newsletter_dispatch",
+      "finish_newsletter_dispatch_owned",
       {
         p_issue: issueId,
         p_audience_key: key,
         p_success: failed === 0,
+        p_claim_token: claimedToken,
       },
     );
     if (finishError) {
@@ -200,9 +225,36 @@ Deno.serve(async (req) => {
         "newsletter-dispatch: finalize failed",
         finishError.message,
       );
+    } else {
+      claimedIssueId = null;
+      claimedAudienceKey = null;
     }
     return json({ ok: failed === 0, sent, failed, total: recipients.length });
   } catch (error) {
+    if (service && claimedIssueId && claimedAudienceKey) {
+      try {
+        const { error: releaseError } = await service.rpc(
+          "finish_newsletter_dispatch_owned",
+          {
+            p_issue: claimedIssueId,
+            p_audience_key: claimedAudienceKey,
+            p_success: false,
+            p_claim_token: claimedToken,
+          },
+        );
+        if (releaseError) {
+          console.error(
+            "newsletter-dispatch: claim release failed",
+            releaseError.message,
+          );
+        }
+      } catch (releaseError) {
+        console.error(
+          "newsletter-dispatch: claim release request failed",
+          releaseError instanceof Error ? releaseError.message : "unknown",
+        );
+      }
+    }
     console.error(
       "newsletter-dispatch: request failed",
       error instanceof Error ? error.message : "unknown",

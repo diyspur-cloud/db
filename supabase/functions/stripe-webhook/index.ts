@@ -6,7 +6,6 @@ function requiredEnv(name: string): string {
   if (!value) throw new Error(`missing_required_env:${name}`);
   return value;
 }
-const stripe = new Stripe(requiredEnv("STRIPE_SECRET_KEY"));
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -16,7 +15,16 @@ Deno.serve(async (req) => {
   }
   const signature = req.headers.get("stripe-signature");
   const secret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
-  if (!signature || !secret) {
+  if (!secret) {
+    return new Response("webhook not configured", { status: 503 });
+  }
+  if (!signature) {
+    return new Response("invalid signature", { status: 400 });
+  }
+  let stripe: Stripe;
+  try {
+    stripe = new Stripe(requiredEnv("STRIPE_SECRET_KEY"));
+  } catch {
     return new Response("webhook not configured", { status: 503 });
   }
   let event: Stripe.Event;

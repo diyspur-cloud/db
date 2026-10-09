@@ -1,0 +1,10 @@
+[
+  "20261009025153_fix_buddy_read_policy_recursion.sql",
+  "20261009025155_fix_reading_list_policy_recursion.sql",
+  "20261009025157_restore_admin_predicate.sql",
+  "20261009025159_restore_internal_counter_triggers.sql",
+  "20261009025201_restore_profile_onboarding_contract.sql",
+  "20261009025203_restore_community_stats_contract.sql",
+  "20261009025205_restore_club_progress_panel_contract.sql",
+  "20261009025524_award_daily_streak_bonus.sql"
+]

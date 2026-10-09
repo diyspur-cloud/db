@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514834697,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_949679eb-8cc5-4dbc-94b3-e3e5b0beac40_1/source/ai-recommendations/index.ts",
+  "ezbr_sha256": "0ff47b479b38a560fefc889434cfc1b7e38e0f7f2b4d82917d653e1e2f9beba2",
+  "id": "949679eb-8cc5-4dbc-94b3-e3e5b0beac40",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_949679eb-8cc5-4dbc-94b3-e3e5b0beac40_1/source/deno.json",
+  "name": "ai-recommendations",
+  "slug": "ai-recommendations",
+  "status": "ACTIVE",
+  "updated_at": 1791514834697,
+  "verify_jwt": true,
+  "version": 1
+}

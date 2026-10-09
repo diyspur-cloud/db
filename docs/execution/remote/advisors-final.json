@@ -1,0 +1,74 @@
+{
+  "result": {
+    "lints": [
+      {
+        "categories": [
+          "SECURITY"
+        ],
+        "count": 6,
+        "description": "Detects extensions installed in the \\`public\\` schema.",
+        "facing": "EXTERNAL",
+        "findings": [
+          {
+            "detail": "Extension \\`vector\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "vector",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          },
+          {
+            "detail": "Extension \\`pg_trgm\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "pg_trgm",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          },
+          {
+            "detail": "Extension \\`citext\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "citext",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          },
+          {
+            "detail": "Extension \\`unaccent\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "unaccent",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          },
+          {
+            "detail": "Extension \\`btree_gin\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "btree_gin",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          },
+          {
+            "detail": "Extension \\`pg_net\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "pg_net",
+              "schema": "public",
+              "type": "extension"
+            },
+            "observed_at": "2026-10-09T03:52:51.240Z"
+          }
+        ],
+        "level": "WARN",
+        "name": "extension_in_public",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public",
+        "title": "Extension in Public"
+      }
+    ]
+  }
+}

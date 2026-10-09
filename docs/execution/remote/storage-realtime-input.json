@@ -1,0 +1,1 @@
+{"project_id": "xjhehhfhhoomblcggjpk", "query": "select jsonb_build_object('buckets',(select jsonb_agg(b) from (select id,public from storage.buckets order by id limit 20)b),'publication',(select jsonb_agg(t) from (select schemaname,tablename from pg_publication_tables where pubname='supabase_realtime' order by tablename limit 30)t)) as inventory limit 1"}

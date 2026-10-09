@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514847209,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_fab81f95-ad67-452e-85cd-f40b40adea67_1/source/match-readers/index.ts",
+  "ezbr_sha256": "0d176b6158c24f9a4468f6a0c9c132f0b6381d80ebe160df454bd7c4872e936c",
+  "id": "fab81f95-ad67-452e-85cd-f40b40adea67",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_fab81f95-ad67-452e-85cd-f40b40adea67_1/source/deno.json",
+  "name": "match-readers",
+  "slug": "match-readers",
+  "status": "ACTIVE",
+  "updated_at": 1791514847209,
+  "verify_jwt": true,
+  "version": 1
+}

@@ -1,0 +1,221 @@
+{
+  "cron": [
+    {
+      "jobid": 1,
+      "active": true,
+      "jobname": "refresh-mv-book-community-stats",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "jobid": 2,
+      "active": true,
+      "jobname": "reminders-every-hour",
+      "schedule": "0 * * * *"
+    }
+  ],
+  "tables": 77,
+  "cron_runs": [
+    {
+      "jobid": 1,
+      "status": "succeeded",
+      "end_time": "2026-10-09T00:00:00.431854+00:00",
+      "start_time": "2026-10-09T00:00:00.231942+00:00",
+      "return_message": "REFRESH MATERIALIZED VIEW"
+    }
+  ],
+  "migrations": [
+    {
+      "name": "sdd_001_foundation",
+      "version": "20261008211412"
+    },
+    {
+      "name": "sdd_002_base_security_functions",
+      "version": "20261008211447"
+    },
+    {
+      "name": "sdd_003_realtime_storage_base",
+      "version": "20261008211504"
+    },
+    {
+      "name": "sdd_004a_extensions_enums",
+      "version": "20261008211607"
+    },
+    {
+      "name": "sdd_004b_storage_complement",
+      "version": "20261008211616"
+    },
+    {
+      "name": "sdd_004c_book_metadata_reading",
+      "version": "20261008211627"
+    },
+    {
+      "name": "sdd_004d_journal_lists",
+      "version": "20261008211637"
+    },
+    {
+      "name": "sdd_004e_milestones_stats_quiz",
+      "version": "20261008211645"
+    },
+    {
+      "name": "sdd_004f_social_feed_match",
+      "version": "20261008211724"
+    },
+    {
+      "name": "sdd_004g_monetization_newsletter",
+      "version": "20261008211725"
+    },
+    {
+      "name": "sdd_004h_extra_content_activities",
+      "version": "20261008211726"
+    },
+    {
+      "name": "sdd_004i_social_render_jobs",
+      "version": "20261008211727"
+    },
+    {
+      "name": "sdd_005a_rls_complement_1",
+      "version": "20261008211843"
+    },
+    {
+      "name": "sdd_005b_rls_complement_2",
+      "version": "20261008211844"
+    },
+    {
+      "name": "sdd_005c_rls_complement_3",
+      "version": "20261008211845"
+    },
+    {
+      "name": "sdd_006_views_and_counters",
+      "version": "20261008211908"
+    },
+    {
+      "name": "sdd_007_realtime_complement",
+      "version": "20261008211915"
+    },
+    {
+      "name": "sdd_008a_quiz_average_triggers",
+      "version": "20261008212007"
+    },
+    {
+      "name": "sdd_008b_mood_feed_counter_triggers",
+      "version": "20261008212008"
+    },
+    {
+      "name": "sdd_008c_goals_milestones_reader_match",
+      "version": "20261008212009"
+    },
+    {
+      "name": "sdd_009_seed_core",
+      "version": "20261008212209"
+    },
+    {
+      "name": "sdd_010a_seed_catalog_metadata",
+      "version": "20261008212227"
+    },
+    {
+      "name": "sdd_010b_seed_chapter_content",
+      "version": "20261008212229"
+    },
+    {
+      "name": "sdd_010c_seed_plans_newsletter_retry",
+      "version": "20261008212250"
+    },
+    {
+      "name": "add_book_reviews",
+      "version": "20261008214832"
+    },
+    {
+      "name": "add_user_club_reading_context",
+      "version": "20261008214847"
+    },
+    {
+      "name": "restore_missing_rls_policies",
+      "version": "20261008214859"
+    },
+    {
+      "name": "add_community_reading_views",
+      "version": "20261008214920"
+    },
+    {
+      "name": "harden_views_and_functions",
+      "version": "20261008215009"
+    },
+    {
+      "name": "index_uncovered_foreign_keys",
+      "version": "20261008215045"
+    },
+    {
+      "name": "optimize_rls_auth_initplans",
+      "version": "20261008215117"
+    },
+    {
+      "name": "harden_community_data_access",
+      "version": "20261008215324"
+    },
+    {
+      "name": "drop_duplicate_video_timed_comments_index",
+      "version": "20261008215751"
+    },
+    {
+      "name": "schedule_book_stats_refresh",
+      "version": "20261008220410"
+    },
+    {
+      "name": "harden_core_authorization",
+      "version": "20261008225152"
+    },
+    {
+      "name": "prevent_client_privilege_escalation",
+      "version": "20261008225535"
+    },
+    {
+      "name": "encapsulate_profile_consent_privilege",
+      "version": "20261008225856"
+    },
+    {
+      "name": "20261009014533_implement_audit_followups",
+      "version": "20261009020600"
+    },
+    {
+      "name": "fix_buddy_read_policy_recursion",
+      "version": "20261009030146"
+    },
+    {
+      "name": "fix_reading_list_policy_recursion",
+      "version": "20261009030149"
+    },
+    {
+      "name": "restore_admin_predicate",
+      "version": "20261009030152"
+    },
+    {
+      "name": "restore_internal_counter_triggers",
+      "version": "20261009030204"
+    },
+    {
+      "name": "restore_profile_onboarding_contract",
+      "version": "20261009030207"
+    },
+    {
+      "name": "restore_community_stats_contract",
+      "version": "20261009030211"
+    },
+    {
+      "name": "restore_club_progress_panel_contract",
+      "version": "20261009030214"
+    },
+    {
+      "name": "award_daily_streak_bonus",
+      "version": "20261009030217"
+    },
+    {
+      "name": "schedule_meeting_reminders",
+      "version": "20261009030252"
+    },
+    {
+      "name": "fix_quiz_idempotency_conflict",
+      "version": "20261009033340"
+    }
+  ],
+  "tables_rls": 77
+}

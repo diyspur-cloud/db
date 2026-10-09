@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514788413,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_0e726749-7320-4b19-9cfb-404bf53c670c_1/source/award-xp/index.ts",
+  "ezbr_sha256": "d2677b94af4675a0ac80effc27aeda23d27e36c4fc6854222a5c7feb68138234",
+  "id": "0e726749-7320-4b19-9cfb-404bf53c670c",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_0e726749-7320-4b19-9cfb-404bf53c670c_1/source/deno.json",
+  "name": "award-xp",
+  "slug": "award-xp",
+  "status": "ACTIVE",
+  "updated_at": 1791514788413,
+  "verify_jwt": true,
+  "version": 1
+}

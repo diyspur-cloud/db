@@ -4481,12 +4481,16 @@ export type Database = {
         Row: {
           avg_rating: number | null
           avg_spice: number | null
+          avg_spice_level: number | null
           book_id: string | null
           mood_counts: Json | null
+          mood_percent: Json | null
           mood_sample_size: number | null
           pace_percent: Json | null
           plot_vs_character_avg: number | null
+          ratings_count: number | null
           review_count: number | null
+          sample_size: number | null
           title: string | null
         }
         Relationships: []
@@ -4524,6 +4528,9 @@ export type Database = {
           current_season_title: string | null
           current_started_at: string | null
           distinct_readers: number | null
+          finished_count: number | null
+          not_started_count: number | null
+          reading_count: number | null
         }
         Relationships: [
           {
@@ -4788,6 +4795,7 @@ export type Database = {
         }
         Returns: string
       }
+      award_daily_streak_bonus: { Args: { p_user: string }; Returns: boolean }
       award_xp: {
         Args: {
           p_amount: number
@@ -4806,6 +4814,10 @@ export type Database = {
         Args: { p_audience_key: string; p_issue: string }
         Returns: boolean
       }
+      claim_newsletter_dispatch_token: {
+        Args: { p_audience_key: string; p_issue: string }
+        Returns: string
+      }
       consume_quiz_rate_limit: {
         Args: { p_chapter: string; p_user: string }
         Returns: boolean
@@ -4816,6 +4828,15 @@ export type Database = {
       }
       finish_newsletter_dispatch: {
         Args: { p_audience_key: string; p_issue: string; p_success: boolean }
+        Returns: undefined
+      }
+      finish_newsletter_dispatch_owned: {
+        Args: {
+          p_audience_key: string
+          p_claim_token: string
+          p_issue: string
+          p_success: boolean
+        }
         Returns: undefined
       }
       generate_milestones_for_season: {
@@ -4903,6 +4924,15 @@ export type Database = {
       set_my_lgpd_consent: { Args: { p_consent: boolean }; Returns: undefined }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+      take_rate_limit: {
+        Args: {
+          p_bucket: string
+          p_limit: number
+          p_user: string
+          p_window_seconds: number
+        }
+        Returns: boolean
+      }
       unaccent: { Args: { "": string }; Returns: string }
     }
     Enums: {

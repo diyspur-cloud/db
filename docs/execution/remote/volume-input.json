@@ -1,0 +1,1 @@
+{"project_id": "xjhehhfhhoomblcggjpk", "query": "select jsonb_build_object('quiz_rows',(select count(*) from public.quiz_questions),'feed_rows',(select count(*) from public.feed_posts),'match_rows',(select count(*) from public.user_match_cache)) as volume limit 1;"}

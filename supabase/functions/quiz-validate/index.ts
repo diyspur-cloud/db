@@ -27,19 +27,55 @@ function parseAnswers(value: unknown): AnswerInput[] | null {
   return result;
 }
 
+function canonicalAnswers(
+  answers: ReadonlyArray<{ question_id: string; chosen_idx: number }>,
+): string {
+  return JSON.stringify(
+    [...answers]
+      .sort((left, right) => {
+        if (left.question_id < right.question_id) return -1;
+        if (left.question_id > right.question_id) return 1;
+        return left.chosen_idx - right.chosen_idx;
+      })
+      .map(({ question_id, chosen_idx }) => ({ question_id, chosen_idx })),
+  );
+}
+
 async function finishExisting(
   service: ReturnType<typeof serviceClient>,
   userId: string,
   requestId: string,
+  chapterId: string,
+  expectedAnswers: AnswerInput[],
 ) {
   const { data: attempt, error } = await service.from("quiz_attempts")
-    .select("id,score,total").eq("user_id", userId).eq(
+    .select("id,chapter_id,score,total").eq("user_id", userId).eq(
       "client_request_id",
       requestId,
     ).maybeSingle();
-  if (error || !attempt) return null;
-  const { data: answers } = await service.from("quiz_answers")
+  if (error) {
+    return { response: json({ error: "temporarily_unavailable" }, 503) };
+  }
+  if (!attempt) return null;
+  const { data: answers, error: answersError } = await service.from(
+    "quiz_answers",
+  )
     .select("question_id,chosen_idx,is_correct").eq("attempt_id", attempt.id);
+  if (answersError) {
+    return { response: json({ error: "temporarily_unavailable" }, 503) };
+  }
+  const actualAnswers = (answers ?? []).map((answer) => ({
+    question_id: answer.question_id,
+    chosen_idx: answer.chosen_idx,
+  }));
+  if (
+    attempt.chapter_id !== chapterId ||
+    canonicalAnswers(actualAnswers) !== canonicalAnswers(expectedAnswers)
+  ) {
+    return {
+      response: json({ error: "idempotency_key_conflict" }, 409),
+    };
+  }
   const { error: xpError } = await service.rpc("award_xp", {
     p_user: userId,
     p_source: "quiz_answer",
@@ -85,7 +121,15 @@ Deno.serve(async (req) => {
       return json({ error: "forbidden" }, 403);
     }
     const chapterId = payload.chapter_id;
-    const requestId = req.headers.get("Idempotency-Key") ?? payload.request_id;
+    const suppliedRequestId = req.headers.has("Idempotency-Key")
+      ? req.headers.get("Idempotency-Key")
+      : payload.request_id;
+    // Compatibilidade com o payload antigo: sem chave, esta submissão recebe
+    // uma identidade nova no servidor. Retries devem reenviar a mesma UUID
+    // fornecida para aproveitar a idempotência persistida.
+    const requestId = suppliedRequestId === undefined
+      ? crypto.randomUUID()
+      : suppliedRequestId;
     const answers = parseAnswers(payload.answers);
     if (
       typeof chapterId !== "string" || !UUID_RE.test(chapterId) ||
@@ -94,7 +138,13 @@ Deno.serve(async (req) => {
       return json({ error: "invalid_payload_or_missing_idempotency_key" }, 400);
     }
     const service = serviceClient();
-    const existing = await finishExisting(service, user.id, requestId);
+    const existing = await finishExisting(
+      service,
+      user.id,
+      requestId,
+      chapterId,
+      answers,
+    );
     if (existing) return existing.response;
 
     // Publicly available chapter access is defined by an active/finished season;
@@ -130,7 +180,13 @@ Deno.serve(async (req) => {
       return json({ error: "temporarily_unavailable" }, 503);
     }
     if (allowed !== true) {
-      const racedDuplicate = await finishExisting(service, user.id, requestId);
+      const racedDuplicate = await finishExisting(
+        service,
+        user.id,
+        requestId,
+        chapterId,
+        answers,
+      );
       if (racedDuplicate) return racedDuplicate.response;
       return json({ error: "rate_limited", retry_after_seconds: 60 }, 429);
     }
@@ -190,6 +246,9 @@ Deno.serve(async (req) => {
         p_answers: details,
       },
     );
+    if (recordError?.code === "22023") {
+      return json({ error: "idempotency_key_conflict" }, 409);
+    }
     if (recordError || !recorded?.length) {
       console.error(
         "quiz-validate: atomic record failed",

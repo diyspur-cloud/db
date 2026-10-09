@@ -1,0 +1,1 @@
+{"project_id": "xjhehhfhhoomblcggjpk", "query": "select n.nspname as schema,c.relname,c.reloptions,pg_get_viewdef(c.oid,true) as definition from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind in ('v','m') and c.relname in ('v_book_community_stats','mv_book_community_stats','v_club_progress_panel') order by c.relname limit 10"}

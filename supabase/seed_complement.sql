@@ -82,6 +82,7 @@ select c.id, 'pdf', 'Guia de leitura — Capítulos I a V',
        'Perguntas para discussão em grupo e citações marcantes.',
        'https://exemplo.clube/guia-cap1.pdf', 1, true
 from public.chapters c where c.number = 1
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
   AND NOT EXISTS (SELECT 1 FROM public.chapter_extra_content x WHERE x.chapter_id = c.id AND x.title = 'Guia de leitura — Capítulos I a V');
 
 insert into public.chapter_extra_content (chapter_id, kind, title, description, external_url, position, is_public)
@@ -89,6 +90,7 @@ select c.id, 'slides', 'Slides do encontro ao vivo',
        'Deck usado na discussão síncrona.',
        'https://exemplo.clube/slides-cap1.pdf', 2, true
 from public.chapters c where c.number = 1
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
   AND NOT EXISTS (SELECT 1 FROM public.chapter_extra_content x WHERE x.chapter_id = c.id AND x.title = 'Slides do encontro ao vivo');
 
 -- =====================================================================
@@ -108,6 +110,7 @@ select
   ),
   25, 1
 from public.chapters c where c.number = 1
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
 ON CONFLICT (chapter_id, position) DO NOTHING;
 
 -- =====================================================================
@@ -119,6 +122,7 @@ select c.id, 1,
        'Não há resposta certa — anote sua leitura.',
        20, 2000
 from public.chapters c where c.number = 3
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
 ON CONFLICT (chapter_id, position) DO NOTHING;
 
 -- =====================================================================
