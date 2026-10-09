@@ -2,7 +2,7 @@
 
 **Projeto:** `xjhehhfhhoomblcggjpk`
 **Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db)
-**Data de execução:** 8 de outubro de 2026 (UTC−03:00)
+**Data de execução e atualização:** 8–9 de outubro de 2026 (UTC−03:00)
 **Objetivo:** implementar os itens anexados de forma incremental, conservar os dados existentes, reduzir exposição indevida e deixar migrations/testes/documentação reproduzíveis.
 
 ## 1. Princípios de segurança e de não regressão
@@ -144,9 +144,9 @@ Arquivo: `supabase/migrations/20261008220410_schedule_book_stats_refresh.sql`.
 
 ### Testes estáticos e reprodutibilidade
 
-- Parser PostgreSQL `pglast` nos arquivos SQL versionados: migrations, seeds, trechos arquivados e bundles gerados; foram validados 56 arquivos SQL sem erro.
+- Parser PostgreSQL `pglast` nos arquivos SQL versionados: migrations, seeds, trechos arquivados e bundles gerados; foram validados 57 arquivos SQL sem erro após a nova migration.
 - `git diff --check` para whitespace/patches.
-- Executar `python3 scripts/build-remote-bundles.py` e verificar seis bundles/manifests, com o grupo 006 contendo as 13 migrations complementares na ordem registrada.
+- Executar `python3 scripts/build-remote-bundles.py` e verificar seis bundles/manifests de referência; não reaplicá-los no projeto remoto, cujo histórico baseline continua divergente.
 
 ### Smoke tests do catálogo Supabase
 
@@ -177,7 +177,7 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 ### Advisors após a última migration
 
 - **Segurança:** permanece apenas o aviso de 5 extensões em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Não há aviso de SECURITY DEFINER exposto/callable no schema `public`, nem do MV exposto pela Data API.
-- **Performance:** 109 índices com `idx_scan = 0` (inclui índices novos e históricos; não remover sem medir carga), 165 findings do linter de múltiplas policies permissivas herdadas do modelo original. As policies de membership, diário e respostas de prompts corrigidas não aparecem nos findings. Aviso de índice duplicado: zero.
+- **Performance pós-migration:** 113 índices com `idx_scan = 0` (inclui índices novos e históricos; não remover sem medir carga), 165 findings do linter de múltiplas policies permissivas herdadas do modelo original. Não remover índice nem refatorar em massa por esse contador isolado.
 
 ## 5. Estado de aceite
 
@@ -189,15 +189,17 @@ Não foi criado usuário de teste nem gravado payload em produção. Assim, isol
 - [x] MV interno, policies novas sem sobreposição permissiva e remoção do índice duplicado.
 - [x] pg_cron ativo para refresh concorrente a cada seis horas; refresh manual validado.
 - [x] Smoke tests read-only pelo banco e pela Data API anônima.
-- [x] Smoke test PGlite das três migrations finais com claims `anon`/`authenticated`, dois titulares, owner de clube, negações e caminhos permitidos para perfil/consentimento.
-- [ ] Testar leitura/escrita com contas Supabase Auth reais de titular e admin em branch/projeto isolado.
-- [ ] Atualizar e reconciliar o SDD, que ainda não descreve integralmente `book_reviews` e o contexto em `user_clubs`.
-- [ ] Validar consumidores externos do RPC `award_xp` após a revogação de execução direta.
-- [ ] Fazer auditoria dos endpoints/ownership e secrets antes de implantar qualquer Edge Function.
+- [x] Smoke test PGlite de RLS e regras de negócio com migrations de hardening e migration mais recente, claims `anon`/`authenticated`, titulares, owner, operações permitidas/negadas e idempotência.
+- [ ] Testar leitura/escrita com contas Supabase Auth reais de titular e admin em branch/projeto isolado. Harness implementado e estático validado; execução real não ocorreu porque o usuário recusou criação do branch cotado em US$ 0,01344/h e produção é o único projeto conectado.
+- [x] Atualizar o SDD com `book_reviews`, contexto em `user_clubs`, likes do diário e semântica informativa do progresso; status remoto autoritativo também consta no README/relatório.
+- [ ] Validar consumidores externos do RPC `award_xp` após a revogação de execução direta; a fonte Edge correspondente já está codificada/estática, mas ainda não implantada.
+- [x] Revisar as 11 fontes Edge Function, ownership, autenticação alternativa, limites e secrets requeridos; checks Deno passaram. Deploy e teste hospedado permanecem pendentes.
 - [ ] Planejar uma migration separada para mover extensões somente após checar operadores, tipos, search path e integrações.
 - [ ] Criar o job `scheduled-reminders` somente após deploy/autenticação de serviço da Edge Function.
 - [ ] Aplicar os seeds de exemplo apenas em dev com perfil de teste; não no projeto de produção.
 - [ ] Resolver a divergência do histórico baseline antes de usar `supabase db push`.
+- [x] Gerar `src/lib/supabase/database.types.ts` do schema remoto depois da migration.
+- [x] Criar CI estática/PGlite e workflow de deploy manual condicionado a validação, confirmação do project ref e presença dos nomes de secrets.
 
 ## 6. Rollback e recuperação
 
@@ -213,7 +215,7 @@ As migrations foram desenhadas para preservar linhas existentes, mas DDL não é
 
 ## 7. Migrations remotas deste plano
 
-As 13 migrations registradas para esta implementação são:
+As 14 migrations complementares registradas para esta implementação são:
 
 1. `20261008214832 add_book_reviews`
 2. `20261008214847 add_user_club_reading_context`
@@ -228,28 +230,29 @@ As 13 migrations registradas para esta implementação são:
 11. `20261008225152 harden_core_authorization`
 12. `20261008225535 prevent_client_privilege_escalation`
 13. `20261008225856 encapsulate_profile_consent_privilege`
+14. `20261009020600 20261009014533_implement_audit_followups`
 
-Os nomes/versões acima foram confirmados no histórico remoto e espelhados nos arquivos do repositório. O histórico baseline anterior permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. O total final remoto é 37 migrations (24 históricas + 13 novas).
+Os nomes/versões acima foram confirmados no histórico remoto e espelhados nos arquivos do repositório. A versão mais nova foi aplicada pelo Supabase MCP e é refletida pelo prefixo `20261009020600` no arquivo local. O histórico baseline anterior permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. O total remoto atual é 38 migrations (24 históricas + 14 complementares).
 
 ## 8. Decisões de escopo e itens do anexo adiados
 
-A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As 13 migrations novas estão versionadas com as versões remotas exatas; baseline antigo segue bloqueado para `db push`.
+A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As 14 migrations complementares estão versionadas com as versões remotas exatas; baseline antigo segue bloqueado para `db push`.
 
 As cinco extensões em `public` foram mantidas. O endpoint de branches do Supabase não listou um ambiente isolado; sem branch de teste, mover extensões que fornecem tipos e operadores pode quebrar colunas, índices, RPCs ou search path. A pendência fica para uma mudança futura com cópia/restauração e validação de dependências.
 
 O job de refresh da MV foi implementado. O cron HTTP de `scheduled-reminders` não foi criado porque a Edge Function não está implantada e não há credencial de serviço configurada; um job horário sem autenticação produziria falhas recorrentes. O contrato de autorização está documentado em `docs/edge-functions-authorization.md`.
 
-Seeds idempotentes de review/clube foram criados sob `supabase/dev-seeds/`, mas não foram aplicados ao projeto remoto: a auditoria encontrou zero perfis e zero admins. Não foram inseridos dados de amostra. Nenhuma Edge Function foi implantada, conforme o escopo do anexo. A validação RLS com duas sessões JWT reais continua necessária em ambiente isolado.
+Seeds idempotentes de review/clube permanecem em `supabase/dev-seeds/`, sem aplicação ao projeto remoto. O preflight encontrou zero perfis e zero admins; nenhum dado demonstrativo foi inserido. As fontes das 11 Edge Functions foram atualizadas e checadas estaticamente, mas nenhuma foi implantada: credenciais de provedores não foram fornecidas e faltou staging seguro. A validação RLS com duas sessões JWT reais continua necessária em ambiente isolado.
 
 
 ## 9. Plano de desenvolvimento ponta a ponta — próximos passos
 
-As migrations 1–13 deste documento estão no Supabase e versionadas. O plano abaixo é a sequência de produto ainda necessária para transformar o banco preparado numa aplicação implantável. **Não pule as gates de ambiente isolado e autorização real.** Esta etapa não autoriza `supabase db push` contra o projeto existente: o baseline `sdd_*` ainda diverge dos arquivos granulares locais `20260101…`.
+As migrations complementares 1–14 estão no Supabase e versionadas; a mais recente foi aplicada nesta rodada. O plano abaixo continua como sequência de produto para transformar o banco preparado numa aplicação implantável. **Não pule as gates de ambiente isolado e autorização real.** Esta etapa não autoriza `supabase db push` contra o projeto existente: o baseline `sdd_*` ainda diverge dos arquivos granulares locais `20260101…`.
 
 ### 9.1 Estado de saída desta rodada
 
-- **Concluído:** auditoria de schema/RLS/views/Storage/Realtime/cron/advisors; migrations incrementais; hardening de dados pessoais, quiz, spoilers, clube e consentimento; bundle/manifests; README e status; parser SQL, Deno type-check e smoke PGlite.
-- **Ainda não concluído:** reconciliação do SDD/histórico CLI, teste autenticado com Supabase Auth real, integração do frontend, tipos gerados, deploy de Edge Functions, secrets, pipelines e liberação para usuários.
+- **Concluído:** schema e 14 migrations complementares; hardening de dados pessoais, XP/quizzes/metas/likes/votos/newsletter/Stripe; SDD/README/relatório; types TS gerados; 57 arquivos SQL parseados; checks Deno; PGlite; CI e workflow manual de deploy sob gates.
+- **Ainda não concluído:** staging/Auth/Storage/Realtime end-to-end (branch recusado por custo), integração do frontend, configuração/validação de secrets de provedores, deploy de Edge Functions, proteção de reviewers do environment e reconciliação do baseline CLI.
 - **Regra de mudança:** toda alteração futura segue `especificar → criar migration → testar localmente → testar isolado com JWT real → aplicar controladamente → verificar catálogo/API/logs → documentar`. Sem teste positivo e negativo do papel adequado, não libere escrita.
 
 ### 9.2 Sequência de implementação

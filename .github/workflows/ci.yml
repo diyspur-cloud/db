@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/security-smoke/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install SQL parser
+        run: python -m pip install --disable-pip-version-check pglast
+      - name: Parse all SQL migrations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pglast import parse_sql
+          files = sorted(Path("supabase/migrations").rglob("*.sql"))
+          for path in files:
+              parse_sql(path.read_text())
+          print(f"Parsed {len(files)} SQL files")
+          PY
+      - name: Install PGlite smoke dependencies
+        run: npm ci --prefix scripts/security-smoke
+      - name: Test RLS and business rules in PGlite
+        run: npm test --prefix scripts/security-smoke
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Check generated Supabase types
+        run: deno check src/lib/supabase/database.types.ts
+      - name: Check, lint and format Edge Functions
+        run: |
+          deno task --config supabase/functions/deno.json check
+          deno task --config supabase/functions/deno.json lint
+          deno task --config supabase/functions/deno.json fmt:check
+      - name: Typecheck and lint isolated Auth/Storage/Realtime smoke
+        run: |
+          deno task --config scripts/integration-smoke/deno.json check
+          deno task --config scripts/integration-smoke/deno.json lint
+          deno task --config scripts/integration-smoke/deno.json fmt:check
+      - name: Whitespace validation
+        run: git diff --check

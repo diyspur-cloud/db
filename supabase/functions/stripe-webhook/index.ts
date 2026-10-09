@@ -1,61 +1,146 @@
-import { serve } from "https://deno.land/std@0.200.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import Stripe from "https://esm.sh/stripe@14?target=denonext";
+import { createClient } from "@supabase/supabase-js";
+import Stripe from "stripe";
 
-const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
-  apiVersion: "2024-06-20",
-});
+function requiredEnv(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new Error(`missing_required_env:${name}`);
+  return value;
+}
+const stripe = new Stripe(requiredEnv("STRIPE_SECRET_KEY"));
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-serve(async (req) => {
-  const sig = req.headers.get("stripe-signature")!;
-  const raw = await req.text();
+Deno.serve(async (req) => {
+  if (req.method !== "POST") {
+    return new Response("method not allowed", { status: 405 });
+  }
+  const signature = req.headers.get("stripe-signature");
+  const secret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+  if (!signature || !secret) {
+    return new Response("webhook not configured", { status: 503 });
+  }
   let event: Stripe.Event;
   try {
     event = await stripe.webhooks.constructEventAsync(
-      raw,
-      sig,
-      Deno.env.get("STRIPE_WEBHOOK_SECRET")!,
+      await req.text(),
+      signature,
+      secret,
     );
-  } catch (_e) {
+  } catch {
     return new Response("invalid signature", { status: 400 });
   }
-
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
-
-  const { error: insErr } = await supabase.from("payment_events").insert({
-    provider: "stripe",
-    event_id: event.id,
-    event_type: event.type,
-    payload: event as unknown as Record<string, unknown>,
-    processed_at: new Date().toISOString(),
-  });
-  if (insErr) return new Response("duplicate", { status: 200 });
-
-  const obj = event.data.object as Record<string, any>;
-  if (event.type.startsWith("customer.subscription.")) {
-    const { data: plan } = await supabase
-      .from("membership_plans")
-      .select("id")
-      .eq("stripe_price_id", obj.items?.data?.[0]?.price?.id)
-      .maybeSingle();
-
-    await supabase.from("user_subscriptions").upsert(
+  try {
+    const supabase = createClient(
+      requiredEnv("SUPABASE_URL"),
+      requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
       {
-        provider_subscription_id: obj.id,
-        provider_customer_id: obj.customer,
-        plan_id: plan?.id,
-        status: obj.status,
-        current_period_start: new Date(obj.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(obj.current_period_end * 1000).toISOString(),
-        cancel_at_period_end: obj.cancel_at_period_end,
-        updated_at: new Date().toISOString(),
+        auth: { persistSession: false, autoRefreshToken: false },
       },
-      { onConflict: "provider_subscription_id" },
     );
-  }
+    const asRecord = (value: unknown): Record<string, unknown> | null =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+    const object = asRecord(event.data.object) ?? {};
+    const customerValue = object.customer;
+    const customerObject = asRecord(customerValue);
+    const customerId = typeof customerValue === "string"
+      ? customerValue
+      : typeof customerObject?.id === "string"
+      ? customerObject.id
+      : null;
+    const metadata = asRecord(object.metadata);
+    const rawUserId = metadata?.supabase_user_id ??
+      object.client_reference_id ?? null;
+    const metadataUserId =
+      typeof rawUserId === "string" && UUID_RE.test(rawUserId)
+        ? rawUserId
+        : null;
 
-  return new Response("ok", { status: 200 });
+    if (
+      event.type === "checkout.session.completed" && customerId &&
+      metadataUserId
+    ) {
+      const { error } = await supabase.rpc("link_stripe_customer", {
+        p_customer_id: customerId,
+        p_user: metadataUserId,
+      });
+      if (error) throw error;
+    }
+
+    let planId: string | null = null;
+    let subscriptionId: string | null = null;
+    let status: string | null = null;
+    let start: string | null = null;
+    let end: string | null = null;
+    let cancelAtPeriodEnd = false;
+    if (event.type.startsWith("customer.subscription.")) {
+      subscriptionId = typeof object.id === "string" ? object.id : null;
+      const items = asRecord(object.items);
+      const itemData = Array.isArray(items?.data) ? items.data : [];
+      const firstItem = asRecord(itemData[0]);
+      const price = asRecord(firstItem?.price);
+      const priceId = price?.id;
+      if (typeof priceId !== "string") {
+        throw new Error("subscription_price_missing");
+      }
+      const { data: plan, error: planError } = await supabase.from(
+        "membership_plans",
+      )
+        .select("id").eq("stripe_price_id", priceId).maybeSingle();
+      if (planError || !plan) throw new Error("subscription_plan_not_mapped");
+      planId = plan.id;
+      const statusMap: Record<string, string> = {
+        trialing: "trialing",
+        active: "active",
+        past_due: "past_due",
+        canceled: "canceled",
+        paused: "paused",
+        incomplete: "incomplete",
+        unpaid: "past_due",
+        incomplete_expired: "canceled",
+      };
+      status = typeof object.status === "string"
+        ? statusMap[object.status] ?? null
+        : null;
+      if (!status) throw new Error("unsupported_subscription_status");
+      const periodStart = object.current_period_start ??
+        firstItem?.current_period_start;
+      const periodEnd = object.current_period_end ??
+        firstItem?.current_period_end;
+      start = typeof periodStart === "number" && Number.isFinite(periodStart)
+        ? new Date(periodStart * 1000).toISOString()
+        : null;
+      end = typeof periodEnd === "number" && Number.isFinite(periodEnd)
+        ? new Date(periodEnd * 1000).toISOString()
+        : null;
+      cancelAtPeriodEnd = object.cancel_at_period_end === true;
+    }
+
+    const { data, error } = await supabase.rpc(
+      "apply_stripe_subscription_event",
+      {
+        p_event_id: event.id,
+        p_event_type: event.type,
+        p_customer_id: customerId,
+        p_metadata_user: metadataUserId,
+        p_subscription_id: subscriptionId,
+        p_plan_id: planId,
+        p_status: status,
+        p_period_start: start,
+        p_period_end: end,
+        p_cancel_at_period_end: cancelAtPeriodEnd,
+        p_payload: event as unknown as Record<string, unknown>,
+      },
+    );
+    if (error) throw error;
+    return new Response(String(data ?? "ok"), { status: 200 });
+  } catch (error) {
+    console.error(
+      "stripe-webhook: event processing failed",
+      error instanceof Error ? error.message : "unknown",
+    );
+    // Retorne 5xx para que o Stripe repita; o RPC grava o evento somente junto com a assinatura.
+    return new Response("event processing failed", { status: 500 });
+  }
 });

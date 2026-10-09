@@ -1,113 +1,136 @@
-# Relatório de implantação e auditoria final
+# Estado de deployment e auditoria Supabase
 
-**Data:** 2026-10-08 (UTC−03:00)  
-**Projeto Supabase:** `xjhehhfhhoomblcggjpk`  
-**Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db)
-**Escopo:** migrations aditivas do anexo, refresh agendado da MV, hardening de autorização/PII/quiz/spoilers/membership/consentimento, suíte PGlite e documentação. Nenhuma Edge Function foi implantada; jobs de reminders e seeds de amostra não foram aplicados.
+**Snapshot:** 2026-10-09, UTC−03:00 (catálogo consultado após a migration).
+**Projeto:** `xjhehhfhhoomblcggjpk` — [Dashboard](https://supabase.com/dashboard/project/xjhehhfhhoomblcggjpk)
+**Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db), branch de implementação `fix/audit-followups`.
+**Migration desta rodada:** versão remota `20261009020600`; arquivo local `supabase/migrations/20261009020600_20261009014533_implement_audit_followups.sql`.
+**Escopo:** regras de XP/quiz/metas/likes/votos, overview de leitura, reminders, newsletter, Stripe e overlaps de leitores; correções em 11 Edge Function sources, testes, tipos e workflows.
+**Não feito:** deploy de Edge Functions, Auth/Storage/Realtime mutante em production, criação de branch, reescrita do histórico CLI, backup/restore point nesta rodada.
 
-**Backup/restore:** não foi criado backup ou restore point manual durante esta execução. As migrations não apagaram linhas; a migration de autorização normalizou `comments.min_percent` apenas onde o valor legado era `NULL` (`100` para spoiler, `0` nos demais casos). Nenhum dado demonstrativo de usuário foi inserido. Criar restore point antes de futuras mudanças estruturais, especialmente antes de mover extensões ou reconciliar o histórico.
+> **Estado:** a migration consta em `supabase_migrations.schema_migrations` e os novos objetos foram conferidos no catálogo. As verificações locais de SQL, Deno e PGlite passaram. Os 11 handlers estão apenas versionados; o inventário remoto de Edge Functions retorna vazio. Não declarar integração end-to-end nem deployment de funções aprovados.
 
-> **Status:** todas as alterações descritas aqui foram aplicadas ao projeto remoto e registradas localmente. Não há funções/views `SECURITY DEFINER` expostas no schema `public`, e não há FKs sem índice. A suíte PGlite verifica regressões em ambiente isolado; isso **não** certifica Auth real, frontend, Edge Functions nem integrações externas.
+## 1. Catálogo remoto depois da aplicação
 
-## Estado remoto final conferido
-
-| Objeto/métrica | Total | Observação |
+| Item | Valor pós-migration | Evidência/observação |
 |---|---:|---|
-| Tabelas em `public` | 76 | 75 do baseline + `book_reviews` |
-| Tabelas com RLS ativo | 76 | todas as tabelas públicas do inventário |
-| Policies em `public` | 155 | inclui regras explícitas de ownership, privacidade, membership e policies por operação |
-| FKs em `public` | 130 | nenhuma FK ficou sem índice de cobertura |
-| Índices em `public` + `private` | 222 | após remoção da cópia idêntica `vtc_sec_idx` e índice de rate-limit |
-| Views comuns em `public` | 12 | todas com `security_invoker=true` |
-| Materialized views | 1 | `private.mv_book_community_stats`, fora do schema público da Data API |
-| ENUMs | 30 | compatíveis com o baseline/SDD |
-| Funções `public`/`private` com `search_path` fixo | 32 | inclui helpers com referências de esquema explícitas |
-| Policies com `auth.uid()` direto sem initplan | 0 | verificado no catálogo |
-| Triggers de aplicação em `public` | 13 | inclui timestamp LGPD gerado pelo banco |
-| Migrations remotas | 37 | 24 históricas + 13 complementares |
-| Tabelas da publicação `supabase_realtime` | 15 | publicação preexistente preservada |
-| Buckets do SDD | 10 | preservados |
-| Jobs pg_cron ativos | 1 | refresh da MV privada a cada 6h; nenhum job HTTP de reminders |
-| Arquivos SQL validados | 56 | sintaxe parseada com PostgreSQL `pglast` |
+| Tabelas públicas | 77 | Inclui `reading_journal_likes`. |
+| Tabelas públicas com RLS | 77/77 | RLS conferida no catálogo. |
+| Policies públicas | 158 | 3 novas policies de likes do diário adicionadas ao estado anterior. |
+| FKs públicas | 132 | Duas novas FKs na tabela de likes. |
+| Índices | 225 `public` + 8 `private` | Inclui novos índices de idempotência/lookup. |
+| Views comuns públicas | 12 | As 12 estão configuradas `security_invoker=true`. |
+| Materialized views | 1 | `private.mv_book_community_stats`. |
+| ENUMs públicos | 30 | Sem alteração desta migration. |
+| Triggers de aplicação públicos | 17 | Contadores/estatísticas e timestamps calculados no banco. |
+| Tabelas em `supabase_realtime` | 15 | Publicação preexistente preservada. |
+| Buckets Storage | 10 | Inclui `feed-media` privado e outras policies existentes. |
+| Histórico remoto | 38 migrations | 24 entradas históricas `sdd_*` + 14 complementares, incluindo versão `20261009020600`. |
+| `SECURITY DEFINER` em schema `private` | 16 | Helpers internos; o schema `private` não está exposto na Data API. |
+| Edge Functions remotas | 0 | `list_edge_functions` retornou lista vazia. |
 
-A tabela `book_reviews` e os quatro campos de contexto foram criados sem migrar dados de usuário; `book_reviews` tinha 0 linhas e `user_clubs` tinha 0 linhas. O MV continha a linha do livro demonstrativo. O projeto tinha 0 perfis e 0 admins; por isso os seeds opcionais de reviews/clube não foram executados. Nenhuma migration apagou linhas; além da normalização documentada de `comments.min_percent`, não foi executado DML para reescrever registros de usuário.
+O remote usa PostgreSQL 17 (`server_version_num` consultado; `supabase/config.toml` local adota `major_version = 17`). A documentação do CLI recomenda alinhar `major_version` à versão principal real: [Supabase CLI config](https://supabase.com/docs/guides/local-development/cli/config).
 
-## Implementação de schema e acesso
+## 2. Migration aplicada
 
-- Criada `public.book_reviews`: rating e nível de conteúdo 0–5, texto opcional até 20.000 caracteres, flag de spoiler, timestamps, soft-delete e unicidade por `(book_id, user_id)`.
-- Acrescentadas a `public.user_clubs` as colunas opcionais `current_book_id`, `current_season_id`, `current_started_at` e `current_ends_at`; FKs usam `ON DELETE SET NULL`.
-- `meeting_rsvps` e `user_challenges`: leitura própria/admin e escrita do titular, dividida por comando SQL. `host_prompt_votes`: somente o titular pode ler/alterar linhas individuais.
-- `v_chapter_audience` e `v_host_prompt_results` retornam agregados por funções internas estreitas. A API não recebe permissão de leitura para as linhas individuais de votos.
-- `v_book_community_stats` publica estatísticas comunitárias; o MV que a alimenta foi movido para `private`. `v_club_progress_panel` usa `user_clubs`, não uma tabela nova `public.clubs`.
-- `build_user_reading_snapshot(uuid)` é `SECURITY INVOKER`, não executável por `anon` e restringe JWT autenticado ao próprio `p_user`.
-- Foram endurecidas 12 views e 32 funções verificadas; as RPCs públicas de perfil/consentimento são `SECURITY INVOKER`, com helper de leitura estrito em schema `private`.
-- Comentários e posts do feed aplicam proteção contra spoilers por progresso; a view pública de quiz exclui resposta/explicação e a fonte `quiz-validate` valida a tentativa no servidor, mas ainda não foi implantada.
-- Grants de `profiles` protegem PII, `level`, `role` e o timestamp de consentimento; um trigger server-side define/limpa `lgpd_consent_at` e `updated_at`.
-- Membership de clube só permite self-join como `member`; apenas owner atribui papéis (`owner`, `moderator`, `member`). Diário e respostas de prompts usam policies separadas por comando SQL.
-- `feed-media` é privado (0 objetos no momento da auditoria); mídias extras permanecem em buckets privados.
-- Criados índices para as 130 FKs segundo critério de prefixo; removido um índice B-tree redundante exato, mantendo `vtc_chapter_sec_idx`.
-- Habilitado `pg_cron` e criado `refresh-mv-book-community-stats` (`0 */6 * * *`) para refresh concorrente de `private.mv_book_community_stats`.
+A migration foi aplicada pelo Supabase MCP ao projeto identificado, após validação local e após o usuário recusar a criação do branch isolado solicitado no anexo. A versão `20261009020600` foi conferida no histórico remoto; a existência de `reading_journal_likes`, view e RPCs foi consultada pelo catálogo. O tipo TypeScript foi regenerado do schema remoto depois da aplicação.
 
-Detalhes, sequência e critérios estão em [`docs/implementation-plan.md`](./implementation-plan.md). Os trechos originais em `supabase/migrations/blocked/` ficam apenas para rastreabilidade e não devem ser executados.
+### Regras e objetos adicionados/alterados
 
-## Verificações executadas
+1. **XP:** índice único parcial sobre evento `(user_id, source, ref_id)` não nulo e `award_xp` idempotente; XP aceita somente valor positivo, atualiza saldo/temporada sem creditar duas vezes. `EXECUTE` de clientes foi revogado, concedido apenas a `service_role`.
+2. **Médias de quiz:** triggers AFTER `INSERT/UPDATE/DELETE` recalculam médias por usuário/capítulo e lidam com mudança de owner/capítulo ou remoção da última tentativa. Helpers privilegidados residem em `private` com grants revogados.
+3. **Metas/progresso:** recomputação para capítulos/livros e diário; livro completo exige todos os capítulos cadastrados. `finished_at` passa a acompanhar a transição para status `read`. Progresso percentual/status permanece informação autodeclarada, não fronteira de segurança.
+4. **`v_user_reading_overview`:** agrega progresso por livro e diário em CTEs separadas para evitar multiplicação de contagens/minutos; view `security_invoker`.
+5. **`reading_journal_likes`:** tabela nova (PK `entry_id,user_id`), RLS e grants mínimos; trigger em função `private` mantém `reading_journal_entries.likes_count`, sem escrita direta do contador pelo cliente.
+6. **Enquetes:** valida opção e janela aberta; triggers mantêm contagens em inserção/troca/remoção. A migration sincroniza `book_poll_options.votes_count` com votos existentes.
+7. **Quiz:** `private.quiz_rate_limits` e RPC transacional para limite por user/chapter; `record_quiz_attempt` usa `p_request_id` para idempotência e grava tentativa. Chamador Edge Function deve autenticar e verificar capítulo publicado.
+8. **Reminders:** ledger privado e RPC `deliver_meeting_reminder` deduplicam por pessoa/reunião/janela sob concorrência.
+9. **Newsletter:** leases por edição/audiência e RPCs de claim/finalização; retries parciais não reenviam recipients já registrados como enviados.
+10. **Stripe:** mapeamento de customers e RPC transacional de aplicação do evento com ID único para replay seguro e sincronização de assinatura.
+11. **Overlaps:** RPC retorna interseções reais de livros/moods sem projetar snapshot privado/embeddings.
 
-### Catálogo
+### DML e conservação de dados
 
-- Confirmados 76 tabelas/RLS, 155 policies, 130 FKs, 12 views invoker, MV em `private` e 32 funções verificadas com path fixo.
-- Nenhuma FK sem índice de cobertura.
-- Nenhuma policy pública contém chamada direta a `auth.uid()` fora do padrão initplan verificado.
-- Nenhuma das tabelas tocadas pelas policies de membership, diário e respostas de prompts aparece nos findings finais de múltiplas policies permissivas.
-- Os dois RPCs públicos de perfil/consentimento são `SECURITY INVOKER`; helper de perfil estrito fica em `private`. O timestamp LGPD é gerado/limpo pelo trigger.
-- `authenticated` pode atualizar apenas `lgpd_consent`, não `lgpd_consent_at`, `updated_at`, `role` ou `level`; `user_club_members.role` está limitado a `owner`/`moderator`/`member`.
-- MV acessível pelo SELECT necessário à view invoker, mas `private` sem `CREATE` para `anon`.
-- Cópia `vtc_sec_idx` removida; `vtc_chapter_sec_idx` mantido.
-- Job pg_cron ativo confirmado como `jobid=1`, com comando para refresh concorrente da MV privada. O refresh manual único também foi executado sem erro; a primeira execução automática ainda aguarda o próximo horário programado.
+Nenhuma tabela, coluna ou linha foi apagada pela migration nova. O DML de reconciliação desta migration recalcula contadores de votos das opções com base nas linhas de voto. Nenhuma conta Auth, perfil de usuário ou dado demonstrativo foi criado. A alteração anterior de `comments.min_percent` para linhas legadas nulas (spoilers = 100; não-spoilers = 0) permanece documentada no histórico; não foi repetida nesta migration.
 
-### Data API (GET anônimo, sem escrita)
+Não foi criado backup/restore point manual antes da rodada. Para mudanças estruturais futuras, criar um ponto de restauração verificável e preferir ambiente isolado.
 
-| Requisição | Status | Resultado |
-|---|---:|---|
-| `v_book_community_stats` | 200 | Dom Casmurro; 0 avaliações |
-| `v_chapter_audience` | 200 | contagens agregadas |
-| `v_host_prompt_results` | 200 | contagens agregadas |
-| `book_reviews` | 200 | conjunto vazio, acesso de leitura |
-| `host_prompt_votes` direto | 401 / SQLSTATE `42501` | acesso negado |
-| `meeting_rsvps` direto | 401 / SQLSTATE `42501` | acesso negado |
-| `user_challenges` direto | 401 / SQLSTATE `42501` | acesso negado |
+## 3. Advisors finais
 
-Não foram criados usuários reais nem gravadas linhas de teste no projeto remoto. Para testar os caminhos positivos/negativos sem alterar produção, `scripts/security-smoke/test.mjs` executa as três migrations em PostgreSQL WASM e simula `anon` e dois usuários autenticados por claims; cobre PII, setter/timestamp LGPD, progress unlock de spoiler, feed privado, quiz, listas, membership e atribuição de role pelo owner. Ainda é necessário repetir com usuários/sessões Supabase Auth reais em branch ou projeto isolado, e validar Storage e Edge Functions.
+### Segurança
 
-### Advisors finais
+O estado pós-migration manteve **5 findings `extension_in_public`**: `vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`. O catalog result e a auditoria anterior não apontavam SECURITY DEFINER exposto na API pública. Helpers que precisam de privilégio estão em `private`, têm `search_path` explícito e grants de chamada restringidos. Não foi movida nenhuma extensão nesta rodada.
 
-**Segurança:** o resultado final mantém somente 5 avisos `extension_in_public`: `vector`, `pg_trgm`, `citext`, `unaccent` e `btree_gin`. Não há aviso de SECURITY DEFINER exposto/callable no schema `public`, nem de MV exposto pela Data API. As funções privilegiadas necessárias usam `search_path` vazio, schemas explícitos e escopo próprio/limitado; helpers ficam em `private`.
+### Performance
 
-**Performance:**
+- **113** findings `unused_index`: uso zero no período medido não demonstra que o índice é dispensável; conservar constraints/FKs e medir com tráfego representativo antes de remover.
+- **165** findings `multiple_permissive_policies`: achados por combinação role/comando do modelo de policies amplo, não 165 tabelas; as policies de likes inseridas nesta migration são separadas por comando.
+- Nenhum finding `duplicate_index` foi apresentado no resultado pós-migration previamente conferido.
 
-- 109 avisos informativos `unused_index`; o contador `idx_scan` sem tráfego suficiente não prova que o índice é inútil. Em particular, índices de FK foram mantidos para operações de integridade e futuros filtros.
-- 165 achados `multiple_permissive_policies` do desenho RLS histórico. São achados do linter por papel/ação (não 165 tabelas distintas); a refatoração abrangente do baseline foi evitada para não alterar o contrato fora do escopo. As policies de membership, diário e respostas de prompts corrigidas não aparecem nesses findings.
-- Nenhum achado `duplicate_index` após remover a cópia idêntica.
+## 4. Edge Functions e entrega
 
-## Histórico e compatibilidade com CLI
+Fonte local presente para 11 nomes: `award-xp`, `vote-next-book`, `scheduled-reminders`, `ai-recommendations`, `ai-user-embeddings`, `match-readers`, `newsletter-dispatch`, `stripe-webhook`, `social-render-card`, `quiz-validate` e `generate-book-embeddings`. O código usa identidade derivada de JWT, papel Admin consultado no banco ou autenticação de serviço/assinatura Stripe conforme o endpoint. Veja [`edge-functions-authorization.md`](./edge-functions-authorization.md).
 
-O remoto contém 37 migrations: 24 entradas históricas `sdd_*` (incluindo seeds), mais 13 versões `20261008…`. Os arquivos locais novos correspondem exatamente às versões remotas: `20261008225152_harden_core_authorization`, `20261008225535_prevent_client_privilege_escalation` e `20261008225856_encapsulate_profile_consent_privilege` completam a sequência. O baseline granular local segue com prefixo `20260101…`, diferente dos nomes agregados já registrados remotamente.
+**Nenhuma foi publicada.** Não foram fornecidos secrets de provedores para registro. Não inferimos, imprimimos nem sobrescrevemos secrets de runtime Supabase. O workflow manual [`deploy-edge-functions.yml`](../.github/workflows/deploy-edge-functions.yml) exige:
 
-**Não execute `supabase db push`, `supabase migration up` ou reaplique os bundles sobre o projeto atual** antes de reconciliar o baseline e o histórico. O gerador de bundles contém seis grupos para bootstrap/revisão de um ambiente novo; ele não é uma instrução de reaplicação no projeto atual.
+- `SUPABASE_ACCESS_TOKEN` como GitHub secret e `SUPABASE_PROJECT_REF` como repository variable;
+- project ref explicitamente digitado igual à variável;
+- names existentes no Supabase para `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SCHEDULED_REMINDERS_SECRET`;
+- ambiente GitHub `production` configurado com reviewers obrigatórios (a configuração de reviewers não foi alterada pela execução).
 
-## Edge Functions e integração da aplicação
+O workflow executa de novo SQL parser, PGlite e validação Deno; o job só publica código no branch `main`, por `workflow_dispatch` manual, sem deploy automático por push/merge. Não aplica migrations.
 
-Há fontes de Edge Functions no repositório, mas a lista remota de funções implantadas continua vazia. O contrato de autorização para os dez endpoints está em [`edge-functions-authorization.md`](./edge-functions-authorization.md). `quiz-validate` foi ajustada para usar cliente separado service-role apenas para `award_xp`; isso é uma alteração de fonte, não um deploy. O RPC agora não pode ser chamado diretamente por `anon`/`authenticated`, e consumidores fora deste repositório devem migrar para uma camada de servidor validada.
+## 5. Testes executados e não executados
 
-`ai-user-embeddings` segue fora do script de deploy: seu RPC agora existe, mas o handler ainda recebe `user_id` sem demonstrar a propriedade do usuário e pode tratar snapshot potencialmente sensível. Newsletter, Stripe, secrets, rate limiting e autorização admin também precisam de revisão antes de qualquer deploy.
+### Executados, com resultado aprovado
 
-## Referências de mudança
+| Verificação | Resultado |
+|---|---|
+| `pglast` em SQL de `supabase/` | 57/57 arquivos parseados; zero erros. |
+| PGlite RLS e smoke anterior | Passou. |
+| PGlite `business-rules.mjs` | Passou para regras XP, quiz, metas, likes, polls, reminders, newsletter, Stripe e matching. |
+| Deno `check` das 11 funções | Passou com compiler options strict e dependências fixadas. |
+| Deno `lint` das funções | Passou. |
+| Deno `fmt:check` das funções | Passou. |
+| `deno check` do `database.types.ts` remoto | Passou. |
+| Check/lint/format do harness Auth/Storage/Realtime | Passou. |
+| `git diff --check` | Executado sem whitespace errors antes da finalização do branch. |
+| Supabase MCP | Aplicação da migration e consultas read-only de histórico/catálogo/advisors confirmadas. |
 
-- Migrations complementares: `supabase/migrations/20261008*.sql` (13 migrations, incluindo três de hardening final).
-- Job de refresh pg_cron: `refresh-mv-book-community-stats`; cron de reminders deliberadamente não criado.
-- Seeds de demonstração de reviews/clube: `supabase/dev-seeds/`, somente para ambiente de desenvolvimento.
-- Plano de desenvolvimento: [`implementation-plan.md`](./implementation-plan.md).
-- Pendências históricas e decisão sobre `public.clubs`: [`implementation-blockers.md`](./implementation-blockers.md).
-- Auditoria SQL read-only: [`supabase/security-audit.sql`](../supabase/security-audit.sql).
-- Supabase CLI: use somente depois de reconciliar o histórico de baseline.
+Os testes PGlite são testes reproduzíveis do SQL em Postgres WASM; não executam JWT Auth real, Data API hospedada, Storage service ou WebSocket Realtime.
 
-Nenhuma chave, token, service-role key ou dado pessoal foi gravado nesta documentação.
+### Não executados — não tratar como sucesso
+
+1. Integração mutante Auth/Storage/Realtime real: deliberadamente não executada em produção.
+2. Testes com contas reais de titular/admin, admin newsletter, provider Stripe/Resend/OpenAI ou resposta de webhooks: exigem staging e secrets.
+3. Deploy de Edge Functions, monitoramento de logs e cron HTTP: funções remotas inexistentes; não foi configurado cron de reminders.
+4. `supabase db push`/reconciliação do baseline: não executado devido ao histórico remoto `sdd_*` diferente dos arquivos locais `20260101…`.
+
+`scripts/integration-smoke/test.ts` recusa o ref de produção, exige `SUPABASE_TEST_ALLOW_MUTATIONS=true` e apaga dados temporários em `finally`. A branch Supabase proposta foi recusada por custo recorrente de US$ 0,01344/h. O procedimento documentado está em [`scripts/integration-smoke/README.md`](../scripts/integration-smoke/README.md).
+
+## 6. Estado de GitHub / CI
+
+- Fonte modificada em branch `fix/audit-followups`; alterações aguardam publicação/revisão pelo PR e CI.
+- [`ci.yml`](../.github/workflows/ci.yml) valida SQL, PGlite, types, Deno e checks estáticos do harness sem acessar Supabase secrets.
+- Não existem actions que façam `db push`, gravem secrets, executem testes mutantes automaticamente ou deployem functions em todo push.
+- Os arquivos públicos foram varridos para padrões típicos de chave publishable/secret, token Stripe live e webhook secret; nenhum literal desses formatos foi encontrado.
+
+## 7. Migrations CLI e operação futura
+
+O histórico remoto tem 24 versões históricas agregadas `sdd_*` e 14 versões complementares numeradas em `20261008…`/`20261009…`. O conjunto local baseline é granular `20260101…` e não corresponde diretamente aos nomes já aplicados; um `supabase migration list` que compare essas fontes pode mostrar drift real. A aplicação MCP registra a migration nova, mas **não reconcilia retroativamente** o baseline antigo.
+
+Até produzir e revisar um plano de baseline/repair isolado:
+
+- não execute `supabase db push`, `supabase migration up` ou `supabase db reset` contra o projeto;
+- não reaplique `supabase/deploy-bundles/`;
+- não edite linhas históricas à mão na tabela interna `supabase_migrations.schema_migrations`;
+- gere restore point antes de novas mudanças estruturais.
+
+## 8. Referências e arquivos relacionados
+
+- [README raiz](../README.md) — guia consolidado, comandos, riscos e passos de release.
+- [SDD](../SDDBD2.md) — contrato de domínio atualizado e distinção entre progresso informativo e autorização.
+- [Plano de implementação](./implementation-plan.md).
+- [Contrato de autorização](./edge-functions-authorization.md).
+- [Bloqueios e decisões](./implementation-blockers.md).
+- [Auditoria SQL read-only](../supabase/security-audit.sql).
+- [Documentação oficial de configuração CLI](https://supabase.com/docs/guides/local-development/cli/config).

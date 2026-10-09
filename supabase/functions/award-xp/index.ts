@@ -1,31 +1,100 @@
-import { serve } from "https://deno.land/std@0.200.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { json, requestUser, serviceClient, UUID_RE } from "../_shared/auth.ts";
 import { cors } from "../_shared/cors.ts";
 
-const XP: Record<string, number> = {
+const XP = {
   join_meeting: 10,
   finish_chapter: 20,
   comment: 30,
   quiz_answer: 50,
   finish_book: 100,
-  streak_bonus: 25,
-};
+} as const;
+type Source = keyof typeof XP;
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
-  const { source, ref_id } = await req.json();
-  const { data: { user } } = await supabase.auth.getUser(
-    req.headers.get("Authorization")?.replace("Bearer ", "") ?? "",
-  );
-  if (!user) return cors(new Response("unauth", { status: 401 }));
+  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  try {
+    const user = await requestUser(req);
+    if (!user) return json({ error: "unauthorized" }, 401);
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    if (!body || typeof body !== "object") {
+      return json({ error: "invalid_payload" }, 400);
+    }
+    const { source, ref_id } = body as Record<string, unknown>;
+    if (
+      typeof source !== "string" || !(source in XP) ||
+      typeof ref_id !== "string" || !UUID_RE.test(ref_id)
+    ) {
+      // streak_bonus não pode ser comprovado por uma chamada controlada pelo próprio usuário.
+      return json({ error: "unsupported_or_invalid_activity" }, 400);
+    }
 
-  const amount = XP[source] ?? 0;
-  await supabase.rpc("award_xp", {
-    p_user: user.id, p_source: source, p_amount: amount, p_ref: ref_id,
-  });
-  return cors(Response.json({ ok: true, amount }));
+    const service = serviceClient();
+    let verified = false;
+    if (source === "finish_chapter") {
+      const { data, error } = await service.from("user_progress").select("id")
+        .eq("user_id", user.id).eq("chapter_id", ref_id).eq("status", "read")
+        .limit(1);
+      verified = !error && !!data?.length;
+    } else if (source === "quiz_answer") {
+      const { data, error } = await service.from("quiz_attempts").select("id")
+        .eq("id", ref_id).eq("user_id", user.id).maybeSingle();
+      verified = !error && !!data;
+    } else if (source === "comment") {
+      const { data, error } = await service.from("comments").select("id")
+        .eq("id", ref_id).eq("user_id", user.id).is("deleted_at", null)
+        .maybeSingle();
+      verified = !error && !!data;
+    } else if (source === "join_meeting") {
+      const { data, error } = await service.from("meeting_rsvps").select(
+        "meeting_id",
+      )
+        .eq("meeting_id", ref_id).eq("user_id", user.id).eq("attending", true)
+        .maybeSingle();
+      verified = !error && !!data;
+    } else if (source === "finish_book") {
+      const { data: chapters, error: chapterError } = await service.from(
+        "chapters",
+      )
+        .select("id, seasons!inner(book_id)").eq("seasons.book_id", ref_id);
+      if (!chapterError && chapters?.length) {
+        const ids = chapters.map((row) => row.id);
+        const { data: progress, error: progressError } = await service.from(
+          "user_progress",
+        )
+          .select("chapter_id").eq("user_id", user.id).eq("status", "read").in(
+            "chapter_id",
+            ids,
+          );
+        verified = !progressError &&
+          new Set((progress ?? []).map((row) => row.chapter_id)).size ===
+            ids.length;
+      }
+    }
+    if (!verified) return json({ error: "activity_not_verified" }, 403);
+
+    const amount = XP[source as Source];
+    const { error } = await service.rpc("award_xp", {
+      p_user: user.id,
+      p_source: source,
+      p_amount: amount,
+      p_ref: ref_id,
+    });
+    if (error) {
+      console.error("award-xp: RPC failed", error.message);
+      return json({ error: "could_not_award_xp" }, 503);
+    }
+    return json({ ok: true, amount });
+  } catch (error) {
+    console.error(
+      "award-xp: request failed",
+      error instanceof Error ? error.message : "unknown",
+    );
+    return json({ error: "server_misconfigured_or_unavailable" }, 503);
+  }
 });
