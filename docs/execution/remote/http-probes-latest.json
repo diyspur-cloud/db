@@ -1,0 +1,154 @@
+{
+  "observed_at": "2026-10-09T03:02:31.341043+00:00",
+  "project": "https://xjhehhfhhoomblcggjpk.supabase.co",
+  "method": "GET; sem identidade de usuário",
+  "results": [
+    {
+      "path": "/rest/v1/buddy_reads?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/buddy_read_members?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/buddy_read_checkpoints?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/reading_lists?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/reading_list_collaborators?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/reading_list_items?select=*&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/rpc/is_admin",
+      "status": 200,
+      "body": false
+    },
+    {
+      "path": "/rest/v1/v_book_community_stats?select=mood_percent,sample_size,ratings_count,avg_spice_level&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/rest/v1/v_club_progress_panel?select=finished_count,reading_count,not_started_count&limit=0",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/auth/v1/settings",
+      "status": 200,
+      "body": {
+        "external": {
+          "anonymous_users": false,
+          "apple": false,
+          "azure": false,
+          "bitbucket": false,
+          "discord": false,
+          "facebook": false,
+          "snapchat": false,
+          "figma": false,
+          "fly": false,
+          "github": false,
+          "gitlab": false,
+          "google": false,
+          "keycloak": false,
+          "kakao": false,
+          "linkedin": false,
+          "linkedin_oidc": false,
+          "notion": false,
+          "spotify": false,
+          "slack": false,
+          "slack_oidc": false,
+          "workos": false,
+          "twitch": false,
+          "twitter": false,
+          "email": true,
+          "phone": false,
+          "zoom": false
+        }
+      }
+    },
+    {
+      "path": "/functions/v1/quiz-validate",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/award-xp",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/vote-next-book",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/scheduled-reminders",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/ai-recommendations",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/ai-user-embeddings",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/match-readers",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/newsletter-dispatch",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "path": "/functions/v1/stripe-webhook",
+      "status": 405,
+      "body": "method not allowed"
+    },
+    {
+      "path": "/functions/v1/social-render-card",
+      "status": 405,
+      "body": {
+        "error": "method_not_allowed"
+      }
+    }
+  ]
+}

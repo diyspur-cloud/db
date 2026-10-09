@@ -1,0 +1,5 @@
+PASS: untouched migration reproduces the known 42803 at the club view
+PASS: replay overlay runs before the historical snapshot suffix
+PASS: view returns the current season title and aggregated progress
+PASS: supabase/tests/sdd_contract.test.sql
+RESULT: REDUCED PGlite replay PASS (not a full Supabase/Docker reset)

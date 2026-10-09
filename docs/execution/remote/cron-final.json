@@ -1,0 +1,30 @@
+[
+  {
+    "evidence": {
+      "http": [
+        {
+          "id": 1,
+          "content": "{\"ok\":true,\"created\":0,\"skipped\":0,\"meetings\":0}",
+          "error_msg": null,
+          "timed_out": false,
+          "status_code": 200
+        }
+      ],
+      "jobs": [
+        {
+          "jobid": 1,
+          "active": true,
+          "jobname": "refresh-mv-book-community-stats",
+          "schedule": "0 */6 * * *"
+        },
+        {
+          "jobid": 2,
+          "active": true,
+          "jobname": "reminders-every-hour",
+          "schedule": "0 * * * *"
+        }
+      ],
+      "run_details": []
+    }
+  }
+]

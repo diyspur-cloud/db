@@ -1,0 +1,17 @@
+[
+  {
+    "case": "valid",
+    "status": 200,
+    "body": "duplicate"
+  },
+  {
+    "case": "missing",
+    "status": 400,
+    "body": "invalid signature"
+  },
+  {
+    "case": "invalid",
+    "status": 400,
+    "body": "invalid signature"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514875125,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_882ac759-0d3c-4542-a36f-04f9a7fe1d69_6/source/stripe-webhook/index.ts",
+  "ezbr_sha256": "4eb2b47be5ae79cb3b4efb2ff6d0f04d527255e27c9d7450e4120348eaed56a5",
+  "id": "882ac759-0d3c-4542-a36f-04f9a7fe1d69",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_882ac759-0d3c-4542-a36f-04f9a7fe1d69_6/source/deno.json",
+  "name": "stripe-webhook",
+  "slug": "stripe-webhook",
+  "status": "ACTIVE",
+  "updated_at": 1791517558537,
+  "verify_jwt": false,
+  "version": 6
+}

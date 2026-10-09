@@ -7,6 +7,7 @@ const XP = {
   comment: 30,
   quiz_answer: 50,
   finish_book: 100,
+  streak_bonus: 25,
 } as const;
 type Source = keyof typeof XP;
 
@@ -26,11 +27,41 @@ Deno.serve(async (req) => {
       return json({ error: "invalid_payload" }, 400);
     }
     const { source, ref_id } = body as Record<string, unknown>;
-    if (
-      typeof source !== "string" || !(source in XP) ||
-      typeof ref_id !== "string" || !UUID_RE.test(ref_id)
-    ) {
-      // streak_bonus não pode ser comprovado por uma chamada controlada pelo próprio usuário.
+    if (typeof source !== "string" || !(source in XP)) {
+      return json({ error: "unsupported_or_invalid_activity" }, 400);
+    }
+
+    if (source === "streak_bonus") {
+      // A RPC deriva a referência UUID de current_date no servidor, exige
+      // atividade de hoje e aplica a chave user/source/ref em modo atômico.
+      // O calendário é UTC/current_date, igual ao trigger de streak existente;
+      // qualquer ref_id enviado pelo cliente é deliberadamente ignorado.
+      const service = serviceClient();
+      const { data, error } = await service.rpc(
+        "award_daily_streak_bonus",
+        { p_user: user.id },
+      );
+      if (error) {
+        console.error("award-xp: daily streak RPC failed", error.message);
+        return json({ error: "could_not_award_xp" }, 503);
+      }
+      const result = Array.isArray(data) ? data[0] : data;
+      const resultObject = result && typeof result === "object"
+        ? result as Record<string, unknown>
+        : null;
+      const awarded = result === true ||
+        (typeof result === "string" && UUID_RE.test(result)) ||
+        resultObject?.awarded === true || resultObject?.ok === true;
+      const duplicate = resultObject?.duplicate === true;
+      if (!awarded && !duplicate) {
+        return json({ error: "streak_bonus_not_eligible" }, 403);
+      }
+      return json({ ok: true, amount: XP.streak_bonus, duplicate });
+    }
+
+    if (typeof ref_id !== "string" || !UUID_RE.test(ref_id)) {
+      // As demais fontes continuam exigindo a referência UUID da atividade
+      // que o servidor verifica antes de chamar award_xp.
       return json({ error: "unsupported_or_invalid_activity" }, 400);
     }
 

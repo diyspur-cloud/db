@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
     )
       .select("embedding").eq("user_id", user.id).maybeSingle();
     if (mineError) return json({ error: "temporarily_unavailable" }, 503);
-    if (!mine?.embedding) return json({ ok: true, matches: [] });
+    if (!mine?.embedding) return json({ ok: false, reason: "no_embedding" });
     const { data: rawMatches, error: matchError } = await service.rpc(
       "match_readers",
       {

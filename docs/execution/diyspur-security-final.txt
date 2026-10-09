@@ -1,0 +1,46 @@
+
+> test
+> node test.mjs && node business-rules.mjs && node final-fixes.mjs
+
+MIGRATIONS APPLY OK (PostgreSQL WASM)
+PASS: anonymous views mask spoilers, private posts, and quiz answers
+PASS denied: anon direct comment body
+PASS denied: anon direct profile PII
+PASS denied: anon private profile RPC
+PASS denied: authenticated direct profile PII
+PASS denied: client-edited consent timestamp
+PASS denied: role escalation
+PASS no rows: cross-owner onboarding update
+PASS denied: client quiz attempt insert
+PASS denied: cross-owner list mutation
+PASS denied: self-join private club
+PASS denied: self-assign club owner role
+PASS denied: self-promote club role
+PASS: eligible-reader spoiler unlock and owner-authorized club/private-feed access
+PASS denied: anon direct profile role
+PASS denied: reader editorial write
+PASS denied: reader manuscript write
+PASS denied: admin direct profile role grant
+PASS: is_admin false/true identities, editorial policy, and Storage admin boundaries
+PASS no rows: buddy member cannot edit owner checkpoint
+PASS no rows: read-only collaborator cannot edit list item
+PASS denied: collaborator list IDOR through list_id swap
+PASS: Buddy Reads/List selects, edit ownership, collaborator can_edit, and IDOR checks
+PASS no rows: reader direct streak mutation
+PASS: normal-client reactions/replies/feed counters and server-maintained streak
+PASS denied: client arbitrary daily streak bonus
+PASS: daily streak25 is activity-gated, server-only, date-referenced, and idempotent
+ALL SECURITY SMOKE ASSERTIONS PASSED
+PASS: follow-up migration applies to PostgreSQL WASM
+PASS: privileged RPCs are invoker-only and not executable by anon
+PASS: XP is idempotent and rolls into the active season
+PASS: annual goals and overview count completed books, not chapters
+PASS: journal likes stay synchronized and goal sums use journal data
+PASS: quiz averages, atomic rate limit and attempt idempotency
+PASS: votes are time-gated, option-scoped, idempotent and atomically counted
+PASS: meeting reminders are deduplicated by reader/meeting/window
+PASS: newsletter dispatch claims recover after failure and finalize once
+PASS: Stripe customer mapping and subscription/event persistence are transactional and idempotent
+PASS: reader matching overlap returns shared book count and shared moods
+ALL BUSINESS-RULE TESTS PASSED
+PASS: final-fixes PGlite migration and concurrency assertions

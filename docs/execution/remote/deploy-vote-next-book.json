@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514793825,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_d42b5002-e518-4f3e-a4b9-8b06d5bc14e4_1/source/vote-next-book/index.ts",
+  "ezbr_sha256": "0bf95fc12fd8624e89bf626f178fc2348b4598b9a209cb825e4fbe75a4dd6ff8",
+  "id": "d42b5002-e518-4f3e-a4b9-8b06d5bc14e4",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_d42b5002-e518-4f3e-a4b9-8b06d5bc14e4_1/source/deno.json",
+  "name": "vote-next-book",
+  "slug": "vote-next-book",
+  "status": "ACTIVE",
+  "updated_at": 1791514793825,
+  "verify_jwt": true,
+  "version": 1
+}

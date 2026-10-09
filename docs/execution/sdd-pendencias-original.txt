@@ -1,0 +1,1538 @@
+# SDD — Pendências e divergências de implementação do Diyspur
+
+**Contrato de referência:** `SDDBD2.md` anexado pelo usuário, 4.060 linhas. O anexo prevalece sobre o SDD modificado no repositório.
+**Repositório analisado:** `diyspur-cloud/db`, branch `main`, commit `dc891b689b9937b8d286fc6b622c06927d8d4f64`.
+**Projeto consultado:** `https://xjhehhfhhoomblcggjpk.supabase.co`.
+**Data da verificação:** 09/10/2026 UTC; 08–09/10/2026 no fuso America/Sao_Paulo.
+**SHA-256 do anexo:** `2135b3ca87f1b74c771f281747e647354fc3d5d03503794fef5f150adcd4d493`.
+
+Este documento contém pendências, implementações parciais e diferenças contratuais. Cada entidade existente deve ser reaproveitada. As correções propostas são código de desenvolvimento, não mudanças aplicadas ao projeto.
+
+### Limites e força da evidência
+
+- **Confirmado remoto:** resposta HTTP observada nesta análise, com chave publishable, sem cadastrar conta, gravar dados, disparar mensagens, enviar pagamento ou executar migrations. Consultas estruturais usam `limit=0`; isso não mede quantidade de registros nem valida isolamento entre usuários.
+- **Confirmado no código:** leitura de arquivos no commit acima, considerando migrations posteriores às migrations-base. Há 93 arquivos de fonte/documentação lidos; bundles gerados não foram usados como uma segunda implementação.
+- **Reprodução local:** PostgreSQL WASM/PGlite em scratch com roles/grants e funções extraídas da fonte; não substitui Supabase Auth ou teste hospedado autenticado.
+- **Não verificável nesta sessão:** catálogo SQL administrativo, histórico remoto, secrets, configurações de backup, conteúdo não público e testes com JWT de usuário. O conector Supabase negou acesso SQL ao projeto Diyspur; a chave publishable não é credencial de administração. O OpenAPI na raiz `/rest/v1/` retornou 401 exigindo secret. Não classificar como ausente um objeto apenas por acesso negado.
+
+A listagem anônima de buckets retornou `[]`: isso não prova que faltam buckets. As recusas de `select=*` em perfil, comentários, feed e quiz correspondem a grants restritos e não são, isoladamente, bugs. As diferenças de privacidade decorrentes desses grants são tratadas somente quando afetam o contrato do anexo.
+
+### Ordem de desenvolvimento
+
+1. Corrigir recursão de RLS e helper de admin; em seguida contadores/streak e onboarding.
+2. Compatibilizar contratos das views e chamadas de cliente; resolver as incompatibilidades explícitas do SDD.
+3. Corrigir carregamento do seed complementar e filtro da newsletter; preservar dados já existentes.
+4. Publicar os dez handlers previstos e habilitar Google/GitHub; configurar cron após o endpoint funcionar.
+5. Implementar consumidores e telas expressamente listados no SDD no repositório da aplicação, ou em estrutura de aplicação deliberadamente criada. O repositório auditado não contém aplicação Next executável.
+6. Executar os testes pendentes de Auth/RLS/Storage/Realtime/Edge Functions e documentação de contratos prevista no anexo.
+
+Para arquivos SQL novos, executar `supabase migration new <nome>` e usar o timestamp realmente gerado. Neste texto, `<timestamp>_<nome>.sql` é um caminho proposto, não uma migration que já existe. Não editar migrations já aplicadas para tentar reparar o remoto. Antes de aplicar, conferir catálogo/histórico com acesso administrativo. `docs/deployment-status.md` relata drift entre o baseline remoto `sdd_*` e o local `20260101…`; essa é evidência documental, ainda não reconsultada nesta sessão.
+
+## 1. Buddy reads: leitura interrompida por recursão de RLS
+
+**Referência no anexo:** §4.7 `buddy_reads`, `buddy_read_members`, `buddy_read_checkpoints`; §5.2 políticas Buddy Reads
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20260101002300_rls_complement.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101002300_rls_complement.sql) — existente.
+- `supabase/migrations/<timestamp>_fix_buddy_read_policy_recursion.sql` — caminho proposto; não existe no snapshot.
+
+**Estado:** falha confirmada na API remota.
+
+| Rota consultada | HTTP | SQLSTATE | Resposta |
+|---|---:|---|---|
+| `/rest/v1/buddy_reads?select=*&limit=0` | 500 | 42P17 | `infinite recursion detected in policy for relation "buddy_reads"` |
+| `/rest/v1/buddy_read_members?select=*&limit=0` | 500 | 42P17 | `infinite recursion detected in policy for relation "buddy_read_members"` |
+| `/rest/v1/buddy_read_checkpoints?select=*&limit=0` | 500 | 42P17 | `infinite recursion detected in policy for relation "buddy_reads"` |
+
+`buddy_reads_visible` consulta `buddy_read_members`; `buddy_members_read` consulta `buddy_reads`. A expansão de RLS forma um ciclo. `buddy_members_self_join` também consulta as duas relações. Os checkpoints herdam o problema ao consultar o pai.
+
+**Passo a passo:**
+
+1. Criar helper no schema `private` que verifique somente a condição booleana existente; fixar `search_path`, sem aceitar identidade enviada pelo cliente.
+2. Substituir somente a leitura do pai pelo helper. Preservar a semântica do anexo nas políticas dos membros: a leitura de membros é pública se o buddy read for público, ou do owner se privado. Não ampliar convite/join além do texto original.
+3. Não criar outra tabela de buddy read nem apagar memberships.
+4. Reexecutar as três rotas e testar proprietário, membro, terceiro e anônimo com registros isolados.
+
+**Código proposto para a migration:**
+
+```sql
+create or replace function private.can_view_buddy_read(p_id uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.buddy_reads br where br.id = p_id
+      and (not br.is_private or br.owner_id = (select auth.uid())
+        or exists (select 1 from public.buddy_read_members m
+          where m.buddy_read_id = br.id and m.user_id = (select auth.uid())))
+  );
+$$;
+revoke all on function private.can_view_buddy_read(uuid) from public;
+grant usage on schema private to anon, authenticated;
+grant execute on function private.can_view_buddy_read(uuid) to anon, authenticated;
+drop policy if exists buddy_reads_visible on public.buddy_reads;
+create policy buddy_reads_visible on public.buddy_reads for select
+  to anon, authenticated using (private.can_view_buddy_read(id));
+```
+
+O helper é privilegiado estritamente para quebrar a consulta recursiva de autorização; retorna um booleano e fica fora da Data API. O owner da função precisa ser uma role confiável capaz de ler as duas tabelas sem reentrar em RLS. Manter `private` não exposto e sem `CREATE` para clientes.
+
+**Aceite:** as três consultas deixam de retornar 42P17; buddy read privado continua invisível a terceiro; INSERT/DELETE seguem as condições do SDD. Ausência de erro com `limit=0` não encerra os testes de autorização.
+
+## 2. Listas personalizadas: leitura interrompida por recursão de RLS
+
+**Referência no anexo:** §4.8 listas e colaboradores; §5.2 Listas personalizadas
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20260101002300_rls_complement.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101002300_rls_complement.sql) — existente.
+- [supabase/migrations/20261008225152_harden_core_authorization.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225152_harden_core_authorization.sql) — existente.
+- `supabase/migrations/<timestamp>_fix_reading_list_policy_recursion.sql` — caminho proposto; não existe no snapshot.
+
+**Estado:** falha confirmada na API remota.
+
+| Rota consultada | HTTP | SQLSTATE | Relação indicada no erro |
+|---|---:|---|---|
+| `/rest/v1/reading_lists?select=*&limit=0` | 500 | 42P17 | `reading_lists` |
+| `/rest/v1/reading_list_collaborators?select=*&limit=0` | 500 | 42P17 | `reading_list_collaborators` |
+| `/rest/v1/reading_list_items?select=*&limit=0` | 500 | 42P17 | `reading_list_collaborators` |
+
+`lists_read` consulta colaboradores; `list_collab_read` consulta listas. As políticas de escrita já alteradas continuam referenciando o pai. O helper de edição existente não eliminou o ciclo da leitura.
+
+**Desenvolvimento:** criar helper booleano de visibilidade usando as condições exatas de `lists_read`, substituir a policy do pai e preservar as policies de escrita atuais. `unlisted` não deve virar público automaticamente: o anexo não faz isso na policy.
+
+```sql
+create or replace function private.can_view_reading_list(p_id uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.reading_lists l where l.id = p_id
+      and (l.visibility = 'public'::public.reading_list_visibility
+        or l.owner_id = (select auth.uid())
+        or exists (select 1 from public.reading_list_collaborators c
+          where c.list_id = l.id and c.user_id = (select auth.uid())))
+  );
+$$;
+revoke all on function private.can_view_reading_list(uuid) from public;
+grant execute on function private.can_view_reading_list(uuid) to anon, authenticated;
+drop policy if exists lists_read on public.reading_lists;
+create policy lists_read on public.reading_lists for select to anon, authenticated
+  using (private.can_view_reading_list(id));
+```
+
+**Aceite:** consulta das três relações sem 42P17; colaborador lê lista compartilhada; terceiro não lê privada; `can_edit=false` não permite edição; troca de `list_id` não permite escrever em outra lista. Conferir também INSERT/UPDATE/DELETE dos colaboradores, pois esses caminhos precisam ler o pai.
+
+## 3. Helper `is_admin()` incompatível com os grants atuais de perfis
+
+**Referência no anexo:** §5.1 Helper: admin?; policies editoriais, Storage e newsletter
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20260101001300_rls_policies.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101001300_rls_policies.sql) — existente.
+- [supabase/migrations/20261008225152_harden_core_authorization.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225152_harden_core_authorization.sql) — existente.
+- [scripts/security-smoke/test.mjs](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/scripts/security-smoke/test.mjs) — existente.
+- `supabase/migrations/<timestamp>_restore_admin_predicate.sql` — caminho proposto; não existe no snapshot.
+
+**Estado:** falha confirmada remoto e reproduzida localmente.
+
+`GET /rest/v1/rpc/is_admin` retornou HTTP 401, SQLSTATE 42501, `permission denied for table profiles`. `is_admin` é SQL invoker na migration-base, e as posteriores apenas fixam seu search path. A coluna `profiles.role` deixou de ser selecionável por `anon`/`authenticated`. O helper não consegue verificar o papel do chamador.
+
+A consulta de `newsletter_issues?select=id&limit=2` também retornou 42501 para `profiles`; a chamada de admin faz parte da policy desse recurso. Não liberar leitura de toda a tabela de perfis para corrigir o helper.
+
+**Código proposto:**
+
+```sql
+create or replace function private.current_user_is_admin()
+returns boolean language sql stable security definer set search_path = '' as $$
+  select coalesce((select p.role = 'admin'::public.user_role
+    from public.profiles p where p.id = (select auth.uid())), false);
+$$;
+revoke all on function private.current_user_is_admin() from public;
+grant execute on function private.current_user_is_admin() to anon, authenticated, service_role;
+create or replace function public.is_admin()
+returns boolean language sql stable security invoker set search_path = '' as $$
+  select private.current_user_is_admin();
+$$;
+```
+
+O helper não aceita `p_user`, e usa exclusivamente `auth.uid()`. A role de usuário continua não editável. Esta forma segue o encapsulamento privado já usado no repositório para consultas autorizadas.
+
+**Teste que falta no repositório:** o bootstrap de `scripts/security-smoke/test.mjs` declara `is_admin` como `SECURITY DEFINER`, diferente da migration-base. Os testes atuais passaram nesta execução, mas esse stub não reproduz o contrato real. Carregar a definição real no teste e exercer `SELECT public.is_admin()` diretamente como anon/leitor/admin, além de ao menos uma policy editorial e uma policy de Storage.
+
+**Aceite:** anon e leitor recebem false, admin true, sem 42501; dados privados e `profiles.role` continuam sem SELECT direto pelo cliente. Não houve teste remoto como admin nesta sessão.
+
+## 4. Reações, respostas, feed e streak: triggers sem privilégios para manter contadores
+
+**Referência no anexo:** §6.1.3, §6.1.4, §6.1.5 e §6.4.4
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20260101001400_functions_and_triggers.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101001400_functions_and_triggers.sql) — existente.
+- [supabase/migrations/20260101002500_functions_complement.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101002500_functions_complement.sql) — existente.
+- [supabase/migrations/20261008225152_harden_core_authorization.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225152_harden_core_authorization.sql) — existente.
+- `supabase/migrations/<timestamp>_restore_internal_counter_triggers.sql` — caminho proposto; não existe no snapshot.
+
+**Estado:** incompatibilidade confirmada no código; reações, replies e streak reproduzidos em PostgreSQL WASM. Sem DML remoto.
+
+| Operação local com role de cliente | Função da fonte | Resultado |
+|---|---|---|
+| Inserir reação | `bump_comment_likes` | 42501: permission denied for table comments |
+| Inserir resposta | `bump_comment_replies` | 42501: permission denied for table comments |
+| Inserir progresso | `touch_streak` | 42501: permission denied for table user_streaks |
+
+As três funções são invoker. Os contadores de comentários não estão entre as colunas UPDATE concedidas ao cliente. `user_streaks` não tem policy de escrita de cliente. O problema de feed é inferência estática equivalente: `bump_feed_post_counters` também é invoker e tenta atualizar `likes_count`/`comments_count`, retirados dos grants de cliente.
+
+**Desenvolvimento:** mover as operações internas de trigger para funções `private`, privilegiadas e não chamáveis por RPC; conservar as tabelas/regras de entrada existentes. Reapontar somente os triggers. Não conceder UPDATE direto de contador nem liberar escrita direta em `user_streaks`.
+
+**Código de desenvolvimento:** reproduzir integralmente os quatro corpos das funções existentes em `private`, alterando somente o cabeçalho para `SECURITY DEFINER SET search_path=''` e qualificando todos os nomes de tabela. Os corpos completos são incluídos no apêndice de código ao final deste documento.
+
+```sql
+revoke all on function private.bump_comment_likes(),
+  private.bump_comment_replies(), private.touch_streak(),
+  private.bump_feed_post_counters() from public, anon, authenticated, service_role;
+drop trigger if exists trg_comment_likes on public.reactions;
+create trigger trg_comment_likes after insert or delete on public.reactions
+  for each row execute function private.bump_comment_likes();
+drop trigger if exists trg_comment_replies on public.comments;
+create trigger trg_comment_replies after insert or delete on public.comments
+  for each row execute function private.bump_comment_replies();
+drop trigger if exists trg_streak_progress on public.user_progress;
+create trigger trg_streak_progress after insert or update on public.user_progress
+  for each row execute function private.touch_streak();
+drop trigger if exists trg_streak_xp on public.xp_events;
+create trigger trg_streak_xp after insert on public.xp_events
+  for each row execute function private.touch_streak();
+drop trigger if exists trg_feed_likes_counters on public.feed_post_likes;
+create trigger trg_feed_likes_counters after insert or delete on public.feed_post_likes
+  for each row execute function private.bump_feed_post_counters();
+drop trigger if exists trg_feed_comments_counters on public.feed_post_comments;
+create trigger trg_feed_comments_counters after insert or delete on public.feed_post_comments
+  for each row execute function private.bump_feed_post_counters();
+```
+
+**Aceite:** A reage/responde ao conteúdo de B autorizado pelas policies, sem 42501; insert/delete mantém os contadores; UPDATE/UPSERT de progresso atualiza streak; usuário não altera contadores pelo REST. As policies e grants de cada tabela continuam sendo a porta de entrada. Esta correção não cria nova regra de pontos, likes ou streak além das existentes no SDD.
+
+## 5. Onboarding não consegue gravar `level` e concluir `onboarding_done`
+
+**Referência no anexo:** §4.2 `profiles`; §10 Onboarding
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20261008225535_prevent_client_privilege_escalation.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225535_prevent_client_privilege_escalation.sql) — existente.
+- [supabase/migrations/20261008225856_encapsulate_profile_consent_privilege.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225856_encapsulate_profile_consent_privilege.sql) — existente.
+- `supabase/migrations/<timestamp>_restore_profile_onboarding_contract.sql` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/onboarding.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato do anexo:**
+
+> **Onboarding** (`profiles.onboarding_done = false`): captura `username`, `display_name`, `level`, `lgpd_consent`.
+
+**Diferença:** `level` no anexo é texto (`estudante`, `junior`, `pleno`, `senior`, `lideranca`). A migration de 2026-10-08 o redefine conceitualmente como atributo de progressão calculado pelo servidor e revoga UPDATE. Não há nova coluna separada de nível profissional, nem endpoint para gravar esse dado de onboarding. `onboarding_done` também não é gravável pelos grants finais. O trigger de cadastro não os preenche.
+
+**Ajuste mínimo ao contrato anexado:** restaurar UPDATE somente dessas duas colunas pelo titular, mantendo `role` e `lgpd_consent_at` protegidos. Não criar outro nível ou outra tabela de perfil.
+
+```sql
+grant update (level, onboarding_done) on public.profiles to authenticated;
+```
+
+A policy `profiles_update_own` já limita `id=auth.uid()` antes e depois da alteração; confirmar o catálogo antes de executar. A lista de valores no anexo é um comentário exemplificativo, não um enum: não acrescentar um CHECK de domínio fechado sem novo requisito.
+
+**Consumidor proposto:**
+
+```ts
+import { supabase } from './client';
+export async function completeOnboarding(input: {
+  username: string; display_name: string; level: string; lgpd_consent: boolean;
+}) {
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw authError ?? new Error('unauthenticated');
+  const consent = await supabase.rpc('set_my_lgpd_consent', { p_consent: input.lgpd_consent });
+  if (consent.error) throw consent.error;
+  const result = await supabase.from('profiles').update({
+    username: input.username, display_name: input.display_name,
+    level: input.level, onboarding_done: true,
+  }).eq('id', user.id);
+  if (result.error) throw result.error;
+}
+```
+
+Os dois comandos não são uma transação única: consentimento pode ser salvo e a atualização falhar, por exemplo por username duplicado. A tela precisa conservar os valores e permitir retry sem marcar sucesso. Não usar payload do usuário para atribuir `role`.
+
+**Campo adicional existente no anexo:** `whatsapp` permanece lido por `get_my_profile_private`, mas não tem UPDATE concedido nem RPC de edição no snapshot. Caso o formulário de perfil do SDD use esse campo, conceder `UPDATE(whatsapp)` ao titular, sem expor SELECT público. A captura de WhatsApp não é requisito explícito do onboarding: não acrescentá-la à tela obrigatória.
+
+**Aceite:** leitor conclui os quatro campos do anexo, reabre sessão e lê `onboarding_done=true`; leitor não altera outro perfil, `role` ou timestamp de consentimento.
+
+## 6. Google e GitHub não habilitados no Supabase Auth
+
+**Referência no anexo:** §10 Providers; §14 Fase 1
+
+**Arquivos envolvidos:**
+
+- [supabase/config.toml](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/config.toml) — existente.
+- `src/lib/supabase/auth.ts` — caminho proposto; não existe no snapshot.
+- `src/app/auth/callback/route.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato:**
+
+> **Providers:** Email/senha + Magic Link + Google + GitHub.
+
+**Evidência remota:** `/auth/v1/settings` apresentou `external.google=false` e `external.github=false`. A configuração local também não possui seções habilitadas desses dois provedores. Não foi enviado e-mail de Magic Link nem testado login de usuário; esse fluxo é pendência de validação, não ausência confirmada do serviço de e-mail.
+
+**Passo a passo:**
+
+1. Configurar credenciais OAuth Google e GitHub nos próprios provedores. O callback Supabase é `https://xjhehhfhhoomblcggjpk.supabase.co/auth/v1/callback`.
+2. Habilitar cada provider no painel Auth do projeto. Configuração local não modifica o painel remoto automaticamente.
+3. Definir `site_url` e allowlist de redirects para a URL real da aplicação. O repositório só contém valores locais: não inventar domínio de produção.
+4. Implementar chamadas abaixo no consumidor Next e callback que troca `code` por sessão.
+5. Testar os dois provedores e verificar criação de profile/XP/streak pelo trigger, com usuários isolados.
+
+```toml
+[auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+[auth.external.github]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
+```
+
+```ts
+// src/lib/supabase/auth.ts — na aplicação consumidora
+import { supabase } from './client';
+export async function signInOAuth(provider: 'google' | 'github') {
+  const result = await supabase.auth.signInWithOAuth({
+    provider, options: { redirectTo: `${location.origin}/auth/callback` },
+  });
+  if (result.error) throw result.error;
+}
+export async function signInMagicLink(email: string) {
+  const result = await supabase.auth.signInWithOtp({
+    email, options: { emailRedirectTo: `${location.origin}/auth/callback` },
+  });
+  if (result.error) throw result.error;
+}
+```
+
+```ts
+// src/app/auth/callback/route.ts — caminho proposto
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSupabase } from '@/lib/supabase/server';
+export async function GET(request: NextRequest) {
+  const code = request.nextUrl.searchParams.get('code');
+  if (!code) return NextResponse.json({ error: 'missing_code' }, { status: 400 });
+  const supabase = await getServerSupabase();
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  if (error) return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
+  return NextResponse.redirect(new URL('/', request.url));
+}
+```
+
+**Aceite:** Google e GitHub habilitados e login completo demonstrado; Magic Link e senha testados sem inferir sucesso a partir de `external.email=true`.
+
+## 7. Os dez handlers exigidos no SDD não estão publicados
+
+**Referência no anexo:** §9.1 a §9.10 e §9.12; §14 Fases 2–10
+
+**Arquivos envolvidos:**
+
+- [supabase/functions/quiz-validate/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/quiz-validate/index.ts) — existente.
+- [supabase/functions/award-xp/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/award-xp/index.ts) — existente.
+- [supabase/functions/vote-next-book/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/vote-next-book/index.ts) — existente.
+- [supabase/functions/scheduled-reminders/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/scheduled-reminders/index.ts) — existente.
+- [supabase/functions/ai-recommendations/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/ai-recommendations/index.ts) — existente.
+- [supabase/functions/ai-user-embeddings/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/ai-user-embeddings/index.ts) — existente.
+- [supabase/functions/match-readers/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/match-readers/index.ts) — existente.
+- [supabase/functions/newsletter-dispatch/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/newsletter-dispatch/index.ts) — existente.
+- [supabase/functions/stripe-webhook/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/stripe-webhook/index.ts) — existente.
+- [supabase/functions/social-render-card/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/social-render-card/index.ts) — existente.
+- [.github/workflows/deploy-edge-functions.yml](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/.github/workflows/deploy-edge-functions.yml) — existente.
+- [scripts/deploy-edge-functions.sh](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/scripts/deploy-edge-functions.sh) — existente.
+
+**Estado:** confirmado remoto; os dez caminhos retornaram HTTP 404 com o mesmo corpo `{"code":"NOT_FOUND","message":"Requested function was not found"}`. As requisições foram GET, sem body e sem executar efeitos externos; o gateway não encontrou o handler.
+
+| Endpoint ausente | Item do SDD | Efeito funcional ainda indisponível |
+|---|---|---|
+| `/functions/v1/quiz-validate` | §9.1 | Validação e persistência de quiz + XP |
+| `/functions/v1/award-xp` | §9.2 | Concessão de XP por atividade |
+| `/functions/v1/vote-next-book` | §9.3 | Votação do próximo livro |
+| `/functions/v1/scheduled-reminders` | §9.4 | Geração agendada de lembretes |
+| `/functions/v1/ai-recommendations` | §9.5 | Recomendação personalizada |
+| `/functions/v1/ai-user-embeddings` | §9.6 | Embedding do leitor |
+| `/functions/v1/match-readers` | §9.7 | Cálculo de matches |
+| `/functions/v1/newsletter-dispatch` | §9.8 | Disparo da newsletter |
+| `/functions/v1/stripe-webhook` | §9.9 | Recepção de eventos de assinatura |
+| `/functions/v1/social-render-card` | §9.10 | Job/card social |
+
+**Desenvolvimento e publicação:**
+
+1. Corrigir as divergências de fonte apontadas neste documento antes de publicar. Não copiar os handlers antigos do anexo por cima das verificações de identidade já implementadas.
+2. No ambiente de runtime, conferir existência dos nomes dos secrets usados pela fonte: `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SCHEDULED_REMINDERS_SECRET`. A presença/valor não foi verificada; não está provado que estejam ausentes.
+3. Validar fontes e lockfile do repositório por `deno task --config supabase/functions/deno.json check`, `lint`, `fmt:check`. As dependências fixadas estão no snapshot; não inventar novas versões.
+4. Publicar pelo workflow existente, com identidade autorizada, variável `SUPABASE_PROJECT_REF=xjhehhfhhoomblcggjpk` e token de deploy. Não usar publishable key como token de deploy.
+5. Confirmar individualmente cada endpoint, usando método/body/autorização esperados, e registrar erro sem credenciais, caso autorizado e dependência indisponível.
+
+**Diferença do script alternativo:** `scripts/deploy-edge-functions.sh` omite `ai-user-embeddings`, ainda alegando bloqueios de autenticação que a fonte atual já trata. Se esse script permanecer como alternativa ao workflow, incluir o handler e corrigir comentário; `generate-book-embeddings` não é um handler previsto nominalmente no anexo e não deve virar um novo requisito deste SDD.
+
+```bash
+# Alteração mínima no loop do script existente:
+for fn in quiz-validate award-xp vote-next-book scheduled-reminders   ai-recommendations ai-user-embeddings match-readers social-render-card newsletter-dispatch; do
+  supabase functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_REF"
+done
+supabase functions deploy stripe-webhook --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+As configurações `verify_jwt=false` de Stripe e reminders já estão em `config.toml`: reaproveitá-las. Os demais handlers exigem JWT de usuário e validação por `requestUser`. Configuração do gate JWT deve ser testada com o modo de assinatura real do projeto; esta sessão não consultou signing keys.
+
+**Aceite:** nenhum dos dez endpoints permanece NOT_FOUND; não confundir OPTIONS/GET respondendo com fluxo de negócio completo. Integrações Resend/OpenAI/Stripe só ficam validadas após execução controlada.
+
+## 8. Cron de reminders não implementado como arquivo executável e incompatível com header atual
+
+**Referência no anexo:** §9.13 Cron (via pg_cron); §14 Fase 4
+
+**Arquivos envolvidos:**
+
+- [supabase/functions/scheduled-reminders/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/scheduled-reminders/index.ts) — existente.
+- `supabase/migrations/<timestamp>_schedule_meeting_reminders.sql` — caminho proposto; não existe no snapshot.
+
+**Estado:** nenhum arquivo executável de migration registra `reminders-every-hour`. O remoto não pôde ser consultado em `cron.job`. O endpoint remoto ausente impede funcionamento mesmo que exista algum job configurado fora do Git.
+
+**Texto exato:** `reminders-every-hour`, horário `0 * * * *`. O exemplo do anexo envia apenas Authorization com service role; o handler atual exige `x-scheduled-reminders-secret`. Repetir aquele SQL produz 401 após o deploy.
+
+**Desenvolvimento:** publicar/testar o handler; configurar o mesmo segredo do runtime no Vault; criar somente um job com o nome e frequência do SDD. Não alterar o refresh de estatísticas existente, que é outro job.
+
+```sql
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+-- Registrar no Vault o segredo scheduled_reminders_secret por canal administrativo,
+-- sem gravar seu valor na migration ou no Git.
+select cron.schedule(
+  'reminders-every-hour', '0 * * * *',
+  $job$
+  select net.http_post(
+    url := 'https://xjhehhfhhoomblcggjpk.supabase.co/functions/v1/scheduled-reminders',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-scheduled-reminders-secret',
+      (select decrypted_secret from vault.decrypted_secrets
+       where name = 'scheduled_reminders_secret')
+    ), body := '{}'::jsonb
+  );
+  $job$
+);
+```
+
+Antes de criar, consultar `cron.job` pelo nome; se existir, ajustar por `cron.alter_job` conforme a versão instalada, sem registrar cópia. O esquema depende de Vault disponível e de acesso administrativo.
+
+**Diferenças do handler em relação ao anexo:** fonte atual seleciona somente reuniões `scheduled`, RSVP `attending=true`, tem limites de 500 reuniões e 2.000 RSVPs, e deduplica por `48h`. O anexo seleciona todas as reuniões da janela e todos os RSVPs sem filtros/limites. Esses filtros são diferenças, não uma implementação literal igual. Não remover autenticação ou deduplicação. Para cobertura completa da janela sem truncamento arbitrário, paginar reuniões e RSVPs, preservando a regra de público que for adotada; o SDD não detalha semântica para RSVP negativo ou reunião cancelada, portanto registrar essa decisão antes de declarar igualdade.
+
+**Aceite:** um job por nome, primeira execução observada em `cron.job_run_details` e resposta do `pg_net`; payload de notificação contém reunião/título/horário; execução repetida não duplica o lembrete. Não foi criado cron nesta análise.
+
+## 9. `streak_bonus: 25` do SDD rejeitado pelo endpoint de XP
+
+**Referência no anexo:** §9.2 `award-xp`; §4.1 enum xp_source; §6.1.5 streak
+
+**Arquivos envolvidos:**
+
+- [supabase/functions/award-xp/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/award-xp/index.ts) — existente.
+- `supabase/migrations/<timestamp>_complete_streak_bonus_award.sql` — caminho proposto; não existe no snapshot.
+
+**Texto exato do mapa de XP do anexo:** `streak_bonus: 25`.
+
+**Diferença:** o objeto `XP` da fonte tem cinco fontes e exclui `streak_bonus`. O handler retorna `unsupported_or_invalid_activity` para essa fonte; o comentário diz que o usuário não pode comprová-la. Não há outra implementação de bônus automático de streak nas migrations lidas.
+
+**Desenvolvimento:** acrescentar somente a fonte ausente, com 25 pontos; verificar streak no servidor e usar a idempotência já existente em `award_xp`. Não alterar os valores das outras cinco fontes nem criar nova frequência de bônus.
+
+```ts
+// Dentro do mapa já existente:
+streak_bonus: 25,
+```
+
+**Bloqueio contratual do próprio anexo:** não especifica se o bônus ocorre por dia, semana ou marco, nem como `ref_id` identifica a atividade. Não existe código fiel completo para escolher essa regra sem inventar requisito. A função `touch_streak` registra dias de atividade, mas não concede bônus. Antes de completar o branch `source==='streak_bonus'`, definir no SDD a condição e a referência idempotente. Enquanto isso, manter rejeição da chamada arbitrária do cliente e registrar este item como parcial.
+
+**Aceite:** 25 pontos somente para a condição que for explicitada; retry da mesma referência sem crédito duplicado. A simples inclusão no mapa sem validação server-side não encerra este item.
+
+## 10. Contrato de entrada do quiz mudou: exemplo do anexo não é aceito
+
+**Referência no anexo:** §9.1; §13.4 chamada de quiz
+
+**Arquivos envolvidos:**
+
+- [supabase/functions/quiz-validate/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/quiz-validate/index.ts) — existente.
+- `src/lib/supabase/quiz.ts` — caminho proposto; não existe no snapshot.
+
+**Diferença confirmada no código:** o anexo envia somente `{chapter_id, answers}`. A fonte exige UUID em `Idempotency-Key` ou `request_id`; o exemplo literal recebe `invalid_payload_or_missing_idempotency_key` após autenticar. Também exige todas as perguntas, no máximo 50, opções válidas e temporada `active`/`finished`; o anexo admite perguntas sem resposta como `chosen_idx=-1` e não contém essas condições.
+
+**Desenvolvimento recomendado para completar o consumidor sem desfazer o backend existente:** gerar uma chave por submissão lógica e reaproveitá-la em retries, preservar todos os question IDs da lista recebida e enviar respostas completas. A tela deve indicar o 400 de resposta incompleta e o 429 de limite.
+
+```ts
+import { supabase } from './client';
+export async function submitQuiz(chapter_id: string,
+  answers: {question_id:string; chosen_idx:number}[], request_id: string) {
+  const { data, error } = await supabase.functions.invoke('quiz-validate', {
+    body: {chapter_id, answers, request_id},
+  });
+  if (error) throw error;
+  return data;
+}
+// Criar crypto.randomUUID() ao iniciar a submissão; retry usa o mesmo valor.
+```
+
+**Se a exigência for compatibilidade estrita com a entrada antiga:** permitir ausência de `request_id` no handler gerando UUID server-side para aquela chamada, mantendo a validação do UUID quando fornecido. Isso torna a entrada antiga aceita, mas não assegura idempotência entre retries sem identificação. Não remover RPC transacional/rate limit. Respostas omitidas e o limite de 50 são divergências que precisam de decisão explícita: o check atual `chosen_idx>=0` impede reproduzir `-1` sem alterar o banco. O anexo não declara esse check e não explica limites de tentativa; não afirmar que as regras atuais são literalmente iguais.
+
+**Aceite:** consumidor e contrato de request documentados de forma coerente; submissão e retry aprovados; casos parcial/temporada/tamanho com resultados registrados. Não executados no remoto porque a função está ausente.
+
+## 11. Contrato das estatísticas comunitárias de livros diferente do anexo
+
+**Referência no anexo:** §6.3.3 `public.mv_book_community_stats`
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20261008214920_add_community_reading_views.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008214920_add_community_reading_views.sql) — existente.
+- [supabase/migrations/20261008215324_harden_community_data_access.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008215324_harden_community_data_access.sql) — existente.
+- `supabase/migrations/<timestamp>_restore_book_stats_contract.sql` — caminho proposto; não existe no snapshot.
+
+**Diferenças de estrutura e significado:**
+
+| Coluna/objeto do anexo | Implementação do snapshot | Ajuste requerido para igualdade do contrato |
+|---|---|---|
+| `public.mv_book_community_stats` | MV em `private`; API `public.v_book_community_stats` | Tornar explícita a rota de compatibilidade; não duplicar MV |
+| `mood_percent` | `mood_counts` | Percentual não é contagem; ler `book_mood_stats.mood_percent` |
+| `sample_size` | `mood_sample_size` | Expor alias esperado |
+| `ratings_count` | `review_count` | Expor alias esperado |
+| `avg_spice_level` | `avg_spice` | Expor alias esperado |
+| `coalesce(avg(rating),0)` | Média null quando sem avaliações | Expor fallback 0 |
+| `coalesce(avg(spice_level),0)` | Média null quando sem avaliações | Expor fallback 0 |
+
+A consulta remota dos nomes esperados na view retornou erro de coluna; ver registro de evidência ao final. No anexo, `book_reviews` é uma dependência usada na MV e no snapshot, mas não tem DDL definido; não recriar tabela já existente para tentar preencher essa inconsistência.
+
+**Código proposto: acrescentar aliases ao contrato API existente:**
+
+```sql
+create or replace view public.v_book_community_stats
+with (security_invoker = true) as
+select mv.book_id, mv.title, mv.mood_counts, mv.pace_percent,
+  mv.plot_vs_character_avg, mv.mood_sample_size, mv.review_count,
+  coalesce(mv.avg_rating, 0) as avg_rating, mv.avg_spice,
+  coalesce(ms.mood_percent, '{}'::jsonb) as mood_percent,
+  mv.mood_sample_size as sample_size,
+  mv.review_count as ratings_count,
+  coalesce(mv.avg_spice, 0) as avg_spice_level
+from private.mv_book_community_stats mv
+left join public.book_mood_stats ms on ms.book_id = mv.book_id;
+```
+
+O patch conserva a ordem das nove colunas existentes e acrescenta os quatro aliases ausentes ao final. Ele converte `avg_rating` para 0 quando null. O anexo não arredonda as médias, e a MV atual usa `round(...,2)`; se for necessária exatidão numérica literal, alterar o SELECT da única MV por migration controlada, após identificar seus dependentes e o job de refresh. Não criar segunda MV nem apagar/recriar sem plano.
+
+**Diferença de consistência temporal do patch mínimo:** `mood_percent` viria do estado corrente, outras colunas do último refresh da MV. Para um único snapshot de refresh, incluir a coluna na definição da MV existente durante substituição controlada; documentar a escolha.
+
+**Aceite:** payload expõe todos os nomes/valores do anexo; sem votos/avaliações usa os mesmos defaults; fonte de cada número explícita. A estrutura segura em `private` é uma diferença intencional e pode ser mantida com API compatível; não anunciar igualdade do nome físico original.
+
+## 12. Painel de clubes sem os nomes e a agregação previstos no anexo
+
+**Referência no anexo:** §6.3.5 `v_club_progress_panel`
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20261008214920_add_community_reading_views.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008214920_add_community_reading_views.sql) — existente.
+- [supabase/migrations/20260101001300_rls_policies.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20260101001300_rls_policies.sql) — existente.
+- `supabase/migrations/<timestamp>_restore_club_progress_panel_contract.sql` — caminho proposto; não existe no snapshot.
+
+**Diferenças:** `finished_count`, `reading_count`, `not_started_count` do anexo não existem no contrato atual. A view usa `chapters_read` e `chapters_in_progress`, acrescenta contexto do clube e não retorna `not_started_count`. `avg_percent` não recebe fallback 0. A execução remota com as três colunas do anexo falhou por nome de coluna.
+
+**Diferença de resultado:** a view atual é invoker e lê `user_progress`, cuja RLS só permite ao usuário ver seu próprio progresso. O painel pode contabilizar apenas o chamador, embora se apresente como coletivo. Isso não foi comprovado com dois usuários no remoto; é inferência estática das policies finais. Não resolver expondo linhas individuais de progresso.
+
+**Falha adicional de replay da fonte:** a migration `20261008214920_add_community_reading_views.sql` seleciona `s.title as current_season_title`, mas agrupa `current_season.title`, sem agrupar `s.title`. A aplicação desse CREATE VIEW em PostgreSQL WASM retornou 42803: `column "s.title" must appear in the GROUP BY clause or be used in an aggregate function`. O remoto tem uma view consultável, portanto essa é divergência de reprodutibilidade da fonte; não uma afirmação de que a view remota inexiste. No replay/baseline corrigido, usar `current_season.title as current_season_title`; no patch completo abaixo, o alias equivalente é `cs.title`. Não reescrever a migration aplicada em produção: incorporar a correção ao plano de baseline/replay e aplicar mudanças incrementais necessárias.
+
+**Inconsistência interna do anexo:** o SELECT original consulta `public.clubs.current_book_id`, mas o DDL só define `public.user_clubs` sem esse campo. Os campos de contexto agora estão em `user_clubs`; reutilizar essa relação, sem inventar `clubs`.
+
+**Desenvolvimento:**
+
+1. Criar helper privado que retorna somente os quatro agregados do anexo para um clube visível ao chamador. Conferir visibilidade antes da agregação. Reusar `current_book_id`; o filtro de `current_season_id` é extensão do repo, não exigência do anexo.
+2. Expor os nomes esperados por aliases na view existente. Acrescentar colunas ao final, sem remover contexto que consumidores atuais possam usar.
+3. Aplicar `coalesce` para média zero.
+4. Não fabricar leitores `want_to_read` sem linhas de progresso: o anexo conta status registrados, não a diferença entre membros e concluintes.
+
+```sql
+create or replace function private.club_progress_counts(p_club uuid)
+returns table(finished_count bigint, reading_count bigint,
+  not_started_count bigint, avg_percent numeric)
+language sql stable security definer set search_path = '' as $$
+  select count(*) filter(where up.status='read'),
+    count(*) filter(where up.status='reading'),
+    count(*) filter(where up.status='want_to_read'),
+    coalesce(round(avg(up.percent)::numeric,2),0)
+  from public.user_clubs uc
+  join public.user_club_members m on m.club_id=uc.id
+  left join public.user_progress up on up.user_id=m.user_id
+    and up.chapter_id in (select c.id from public.chapters c
+      join public.seasons s on s.id=c.season_id where s.book_id=uc.current_book_id)
+  where uc.id=p_club and (not uc.is_private or uc.owner_id=(select auth.uid()));
+$$;
+revoke all on function private.club_progress_counts(uuid) from public;
+grant execute on function private.club_progress_counts(uuid) to anon,authenticated;
+```
+
+**View completa proposta, preservando colunas atuais e acrescentando aliases:**
+
+```sql
+create or replace view public.v_club_progress_panel
+with (security_invoker = true) as
+select uc.id as club_id, uc.name as club_name,
+  uc.current_book_id, b.title as current_book_title,
+  uc.current_season_id, cs.title as current_season_title,
+  uc.current_started_at, uc.current_ends_at,
+  old_panel.distinct_readers,
+  ag.finished_count as chapters_read,
+  ag.reading_count as chapters_in_progress,
+  ag.avg_percent,
+  ag.finished_count, ag.reading_count, ag.not_started_count
+from public.user_clubs uc
+join public.user_club_members member_scope on member_scope.club_id=uc.id
+left join public.books b on b.id=uc.current_book_id
+left join public.seasons cs on cs.id=uc.current_season_id
+cross join lateral private.club_progress_counts(uc.id) ag
+cross join lateral (
+  select count(distinct up.user_id) filter(where rs.id is not null) as distinct_readers
+  from public.user_club_members m
+  left join public.user_progress up on up.user_id=m.user_id
+  left join public.chapters c on c.id=up.chapter_id
+  left join public.seasons rs on rs.id=c.season_id and rs.book_id=uc.current_book_id
+    and (uc.current_season_id is null or rs.id=uc.current_season_id)
+  where m.club_id=uc.id
+) old_panel
+where uc.current_book_id is not null
+group by uc.id,uc.name,uc.current_book_id,b.title,uc.current_season_id,cs.title,
+  uc.current_started_at,uc.current_ends_at,old_panel.distinct_readers,
+  ag.finished_count,ag.reading_count,ag.not_started_count,ag.avg_percent;
+```
+
+A coluna extra `distinct_readers` conserva a semântica invoker/RLS da implementação atual, enquanto os três contadores contratuais e a média vêm do helper agregado. Ela não deve ser apresentada como total comunitário de leitores até seu próprio contrato ser definido; o anexo não solicita essa coluna. O join de membros conserva a condição de existência de membro da view existente. Os aliases são adicionados no final para não alterar nomes/ordem pré-existentes.
+
+O helper respeita a leitura de clube público/owner definida no anexo, sem acrescentar permissão de terceiro a clube privado. A view deve continuar selecionando `user_clubs` sob RLS e fazer `cross join lateral private.club_progress_counts(uc.id)`; mapear os resultados para os nomes existentes/esperados. O retorno completo final depende das colunas atuais consultadas no catálogo; o novo contrato deve conservar todas elas na mesma ordem, adicionando os aliases esperados. Não usar `CREATE OR REPLACE` para tentar renomear/remover coluna existente.
+
+**Aceite:** A/B contribuem com números corretos no painel coletivo público/owner; terceiro não vê clube privado; nomes do anexo consultáveis; média zero sem progresso.
+
+## 13. Contratos alterados de privacidade e agregação precisam de consumidores compatíveis
+
+**Referência no anexo:** §5, §6.2, §6.3, §6.4 e §8
+
+**Arquivos envolvidos:**
+
+- [supabase/migrations/20261008225152_harden_core_authorization.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225152_harden_core_authorization.sql) — existente.
+- [supabase/migrations/20261008225535_prevent_client_privilege_escalation.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261008225535_prevent_client_privilege_escalation.sql) — existente.
+- [supabase/migrations/20261009020600_20261009014533_implement_audit_followups.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/migrations/20261009020600_20261009014533_implement_audit_followups.sql) — existente.
+- [src/lib/supabase/README.md](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/src/lib/supabase/README.md) — existente.
+
+Esta seção registra somente diferenças de contrato não tratadas nas correções anteriores; não propõe desfazer isolamento de dados.
+
+| Referência literal do anexo | Diferença implementada | Trabalho restante para o consumidor/contrato |
+|---|---|---|
+| `profiles_select_all`, leitura de todas as colunas | Projeção pública + RPC privada; `select=*` é negado | Perfil público pela view; dados próprios pela RPC; não usar retorno público como onboarding completo |
+| `comments` SELECT inclui `content` | Corpo só em `v_comments_visible` | Toda lista/leitura de comentários deve usar a view |
+| `comments.min_percent` nullable/default 0 | NOT NULL + CHECK 0–100; normalização de legados | Não enviar null; manter limiar numérico |
+| `quiz_questions` leitura autenticada integral | Gabarito/explicação sem SELECT pelo cliente | Usar `v_quiz_questions_public`; não requisitar `correct_idx` |
+| `quiz_attempts`/`quiz_answers` FOR ALL do titular | Cliente só lê; tentativa gravada pelo servidor | Submeter via Edge Function, sem INSERT direto |
+| `book_poll_votes` gravável diretamente pelo titular | DML exclusivo do servidor | Consumir `vote-next-book`, inclusive mudança/remoção conforme suporte definido |
+| `book_mood_votes` leitura pública no anexo | Apenas votos do titular | UI coletiva deve usar `book_mood_stats`, não votos brutos; canais não equivalem a transmissão de todos os votos |
+| Diário `friends` na policy original: follow aceito unilateral | Dois follows aceitos exigidos | O roadmap exige seguidores mútuos; a policy nova resolve essa inconsistência do anexo; registrar o contrato de UI |
+| Diário público na policy original inclui anon | Policy final somente `TO authenticated` | É diferença literal; definir se leitura pública exige login antes de anunciar atendimento ao anexo |
+| `feed-media` bucket público e leitura irrestrita | Bucket privado; autorização pelo post | Renderizar mídia por URL assinada autorizada; não usar getPublicUrl para feed privado |
+| `chapter-extras`: qualquer autenticado lê arquivo | Somente `is_public` ou admin | Consumidor deve respeitar conteúdo permitido; anexo não define concessão a assinante para extras privados |
+| `award_xp` apenas incrementa total | Idempotência e saldo por temporada | Reusar RPC servidor; não recriar ledger nem contagem paralela no frontend |
+| Quiz averages em public, AFTER INSERT | Triggers privados AFTER INSERT/UPDATE/DELETE | Tipos/rotas não devem tentar chamar função de trigger por RPC |
+| Metas do anexo contam linhas de capítulo como `books_done` | Função conta livros com todos os capítulos cadastrados, para todos os anos | É diferença de significado; título “livros” no SDD conflita com seu SELECT antigo; manter explícito no consumidor |
+| `v_user_reading_overview`: conta `up.id` como livros e soma diário após join | Contagem por livro e diário pré-agregado | Não reintroduzir o join multiplicador; a igualdade literal do algoritmo antigo não deve ser declarada |
+| `build_user_reading_snapshot`: JSON `title,moods,pace,rating,review` | JSON `book_title`, `book_id`, `status`, `percent`, demais dados e filtro soft-delete | Para forma literal, mapear `book_title` para `title` e remover campos extras na própria RPC; não criar segundo snapshot |
+| `match-readers`: ausente embedding retorna `ok:false,reason:no_embedding` | Retorna `ok:true,matches:[]`; dados compartilhados calculados | A UI precisa distinguir usuário sem embedding antes de chamar, ou recuperar resposta literal no handler; overlaps não são zero artificiais |
+| `social-render-card`: preserva payload e retorna `{ok:true,job}` | Retém apenas title/quote; renderiza SVG imediato e retorna job_id/image_url | Preservar payload original e adicionar `job` ao retorno se for necessária compatibilidade; não inventar layouts de cada kind |
+| `ai-recommendations` aceita `user_id` e usa histórico concluído | Identidade JWT, snapshot completo; ignora user_id enviado | Filtrar fonte para concluídos se quiser equivalência do dado; nunca permitir consulta de outra pessoa |
+| `ai-user-embeddings` hash é tamanho em base36 | SHA-256 e limite de 1h | A aplicação precisa tratar 429; não devolver hash fraco para “igualar” o exemplo |
+
+As diferenças de algoritmo do próprio SDD estão explicitadas; restaurar resultados sabidamente multiplicados ou liberar gabaritos não é uma correção necessária para completar o produto. A equivalência funcional e a equivalência literal de código são coisas distintas. Nenhuma política nova de negócio foi assumida para solucionar esses conflitos.
+
+**Limite:** estas são diferenças observadas, não autorização para novas funcionalidades. Os corpos do SDD e das migrations servem de evidência; cada eventual revisão de contrato deve citar a seção exata. Não reescrever o anexo original fornecido pelo usuário.
+
+## 14. Seed complementar não faz parte do reset local
+
+**Referência no anexo:** §11.2; §14 Fases 5–10
+
+**Arquivos envolvidos:**
+
+- [supabase/config.toml](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/config.toml) — existente.
+- [supabase/seed_complement.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/seed_complement.sql) — existente.
+
+**Estado:** diferença confirmada no arquivo. `[db.seed].sql_paths` contém somente `["./seed.sql"]`; o reset local não carrega `seed_complement.sql`.
+
+```toml
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql", "./seed_complement.sql"]
+```
+
+**Passo a passo:** alterar somente a lista; executar reset numa base local/descartável depois de o replay das migrations estar resolvido; conferir CWs, moods, editorial, milestones, extras, atividades, prompts, planos, conquistas e newsletter. Não aplicar seeds no remoto para “corrigir” o arquivo: consultas públicas já mostraram Dom Casmurro, cinco capítulos, moods, planos, conquistas, editorial, atividade e milestones. Esta análise não reproduz essas linhas no documento porque não são faltantes.
+
+**Riscos do seed a tratar sem inventar conteúdo:** selects de quiz/prompt por `c.number=1/3` no seed-base não limitam temporada; em base com outras temporadas podem criar dados fora do Dom Casmurro. O anexo tem o mesmo SELECT: é uma limitação do próprio SDD, não diferença já introduzida no Git. Para executar repetidamente no ambiente destinado ao MVP, acrescentar `c.season_id='33333333-3333-3333-3333-333333333333'` a esses selects, sem mudar perguntas/opções.
+
+**Aceite:** base local reconstruída recebe os dois seeds uma vez; repetir seed não duplica; os dados demonstrativos ficam na temporada correta. O reset remoto não foi autorizado nem realizado.
+
+## 15. Filtro da newsletter criado pelo seed é rejeitado pelo handler
+
+**Referência no anexo:** §11.2 newsletter; §9.8
+
+**Arquivos envolvidos:**
+
+- [supabase/seed_complement.sql](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/seed_complement.sql) — existente.
+- [supabase/functions/newsletter-dispatch/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/newsletter-dispatch/index.ts) — existente.
+
+**Estado:** incompatibilidade confirmada no código. O seed do anexo e do repo cria `audience_filter={"tags":["welcome"]}`. O handler atual aceita somente `frequency`, `tags_any`, `tags_all`; essa edição é rejeitada com `unsupported_audience_filter`, HTTP 422.
+
+**Passo a passo:** admitir `tags` como alias de compatibilidade, ou retirar o filtro se a intenção for reproduzir exatamente o handler do anexo (que envia a todos os confirmados). Não trocar silenciosamente por uma semântica nova: o anexo define o campo, mas seu handler não aplica filtro.
+
+**Patch de compatibilidade proposto:**
+
+```ts
+const allowedKeys = new Set(['frequency', 'tags_any', 'tags_all', 'tags']);
+if (Object.keys(filterObject).some(key => !allowedKeys.has(key))) {
+  return json({ error: 'unsupported_audience_filter' }, 422);
+}
+for (const key of ['tags_any', 'tags_all', 'tags'] as const) {
+  const value = filterObject[key];
+  if (value !== undefined && (!Array.isArray(value) || value.length > 50 ||
+    !value.every(tag => typeof tag === 'string' && tag.length <= 80))) {
+    return json({ error: 'invalid_audience_filter' }, 422);
+  }
+}
+// No filtro de destinatário, caso a decisão seja alias para qualquer tag:
+const any = (filterObject.tags_any as string[] | undefined)
+  ?? (filterObject.tags as string[] | undefined) ?? [];
+```
+
+O patch só deve usar `tags` como alias após explicitar que a regra é “qualquer tag”. Se a exigência literal for o código do anexo, `audience_filter` não filtra: manter disparo para todos os confirmados. Essas duas opções não são equivalentes e o SDD não escolhe uma terceira.
+
+**Aceite:** a edição gerada pelo próprio seed não recebe 422; conjunto de destinatários esperado explicitado; reexecução sem duplicar entregas já enviadas. O envio real não foi executado nesta análise.
+
+## 16. Aplicação Next executável e conexão do middleware ausentes neste repositório
+
+**Referência no anexo:** §1 frontend Next.js 15; §2 package.json; §13; §14 interfaces
+
+**Arquivos envolvidos:**
+
+- [src/lib/supabase/middleware.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/src/lib/supabase/middleware.ts) — existente.
+- `src/middleware.ts` — caminho proposto; não existe no snapshot.
+- `package.json` — caminho proposto; não existe no snapshot.
+- `src/app/layout.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/page.tsx` — caminho proposto; não existe no snapshot.
+
+**Estado:** ausência confirmada no inventário de `main`. Há utilitários Supabase, tipos e backend, mas não há `package.json` de aplicação na raiz, `src/app` nem arquivo que registre `updateSession` como middleware Next. Os package.json dos testes não são a aplicação.
+
+Isso não prova que um frontend inexiste em outro repositório, que não foi fornecido. Todos os caminhos de UI a seguir são propostos para a aplicação consumidora; não são arquivos encontrados nem uma autorização de implantação.
+
+**Desenvolvimento:** conectar os utilitários a uma aplicação Next.js 15; configurar dependências reais de Next/React/@supabase/ssr/@supabase/supabase-js com lockfile; não inventar versões sem verificar o projeto da aplicação. Reutilizar `client.ts`, `server.ts`, `middleware.ts` e `Database` existentes.
+
+```ts
+// src/middleware.ts — ligação faltante
+import type { NextRequest } from 'next/server';
+import { updateSession } from './lib/supabase/middleware';
+export async function middleware(request: NextRequest) {
+  return updateSession(request);
+}
+export const config = { matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'] };
+```
+
+**Limitação do contrato de cookies do anexo:** ele afirma cookies httpOnly via SSR, mas não configura `httpOnly` nos clientes; autenticação no browser pelo client exige ler a sessão. Não declarar “httpOnly validado” só porque usa @supabase/ssr. Definir se a aplicação manterá o client browser do anexo ou se quer sessão exclusivamente de servidor antes de mudar a arquitetura.
+
+**Limitação de refresh do utilitário atual:** `setAll` altera a resposta mas não sincroniza cookies na request repassada. Ao integrar, sincronizar request e response, conforme a versão instalada de SSR, e validar Server Components após refresh. Isso é verificação da integração ausente, não alegação de falha remota já observada.
+
+**Aceite:** aplicação compila, autenticação/refresh funcionam e chamadas de servidor usam sessão do mesmo usuário. Sem URL/repositório da aplicação, esta etapa é planejável mas não verificável como produto.
+
+## 17. Fluxo P0 da aplicação: livro, calendário, vídeo, discussão, quiz e progresso
+
+**Referência no anexo:** Objetivo P0; §13.4; §14 Fase 2
+
+**Arquivos envolvidos:**
+
+- `src/app/livros/[slug]/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/capitulos/[id]/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/reading.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato do escopo:**
+
+> **P0 (MVP):** Livro → capítulos → calendário → vídeo YouTube → comentários → spoiler por capítulo → quiz → progresso → próximo capítulo → link Amazon.
+
+**Estado:** consumidores/telas não existem no repo auditado. A disponibilidade de tabelas e views não conclui esse fluxo. Não é prova de ausência em outra aplicação.
+
+**Passo a passo de desenvolvimento, sem adicionar funcionalidades:**
+
+1. Na página de livro, obter `books` por slug e temporadas relacionadas; projetar somente informações do catálogo.
+2. Listar `chapters` da temporada por number; não confundir `books.total_chapters=148` com os cinco blocos editoriais do MVP.
+3. Buscar `meetings` dos capítulos e apresentar calendário com `scheduled_at` e duração; agenda/hora do anexo, sem inventar eventos novos.
+4. Renderizar `youtube_url`/`youtube_live_url` presentes; campos nulos precisam de estado vazio. O seed contém `https://youtu.be/...`, exatamente como o anexo: é placeholder do SDD, não URL operacional validada nem um bug divergente já encontrado. A URL real deve ser fornecida editorialmente, sem inventar vídeo.
+5. Ler comentários pela view anti-spoiler. Criar comentário com `user_id` obtido de Auth; o exemplo do anexo omite campo NOT NULL e não roda literalmente.
+6. Reagir por upsert na entidade existente, após corrigir triggers (§4 deste documento).
+7. Obter perguntas pela projeção pública do quiz; enviar respostas à Edge Function com o contrato documentado em §10.
+8. Atualizar progresso de capítulo pelo titular; buscar o próximo capítulo por number na mesma temporada.
+9. Renderizar link Amazon existente; tracking de clique tratado separadamente em §24.
+
+```ts
+// src/lib/supabase/reading.ts — caminhos de leitura/escrita propostos
+import { supabase } from './client';
+export async function chapterData(chapterId: string) {
+  const [comments, meetings, questions] = await Promise.all([
+    supabase.from('v_comments_visible').select('*').eq('chapter_id',chapterId)
+      .order('created_at',{ascending:true}),
+    supabase.from('meetings').select('*').eq('chapter_id',chapterId)
+      .order('scheduled_at',{ascending:true}),
+    supabase.from('v_quiz_questions_public').select('*').eq('chapter_id',chapterId)
+      .order('position',{ascending:true}),
+  ]);
+  for (const result of [comments,meetings,questions]) if (result.error) throw result.error;
+  return {comments:comments.data,meetings:meetings.data,questions:questions.data};
+}
+export async function createComment(chapter_id:string,content:string,
+  is_spoiler:boolean,min_percent:number) {
+  const {data:{user},error}=await supabase.auth.getUser();
+  if(error||!user) throw error??new Error('unauthenticated');
+  const result=await supabase.from('comments').insert({
+    chapter_id,user_id:user.id,content,is_spoiler,min_percent,
+  });
+  if(result.error) throw result.error;
+}
+export async function saveProgress(chapter_id:string,
+  status:'want_to_read'|'reading'|'read'|'dnf',percent:number) {
+  const {data:{user},error}=await supabase.auth.getUser();
+  if(error||!user) throw error??new Error('unauthenticated');
+  const result=await supabase.from('user_progress').upsert({
+    user_id:user.id,chapter_id,status,percent,
+  },{onConflict:'user_id,chapter_id'});
+  if(result.error) throw result.error;
+}
+export async function nextChapter(season_id:string,number:number) {
+  const result=await supabase.from('chapters').select('*').eq('season_id',season_id)
+    .gt('number',number).order('number',{ascending:true}).limit(1).maybeSingle();
+  if(result.error) throw result.error;
+  return result.data;
+}
+```
+
+**P2 expresso no objetivo, sem consumidor no repo:** “histórico de temporadas” e “eventos presenciais”. Não criar tabela de eventos: `meetings.kind='in_person'/'hybrid'`, `location` e `scheduled_at` já são o suporte do anexo. Implementar listagem de temporadas encerradas e apresentação dos dados presenciais na mesma agenda.
+
+```ts
+// Adições a src/lib/supabase/reading.ts
+export async function seasonHistory() {
+  const r=await supabase.from('seasons').select('*,books(*)')
+    .eq('status','finished').order('number',{ascending:false});
+  if(r.error) throw r.error;return r.data;
+}
+export async function inPersonAgenda() {
+  const r=await supabase.from('meetings').select('*').in('kind',['in_person','hybrid'])
+    .order('scheduled_at',{ascending:true});
+  if(r.error) throw r.error;return r.data;
+}
+```
+
+**P2 buddy reads:** criar consumidor `src/app/buddy-reads/[id]/page.tsx` para os campos existentes do grupo, membros e checkpoints, após a correção de recursão. Não inventar chat, convites por e-mail ou nova regra de membership. Mostrar metas de página/percent/date e submeter join/leave às policies existentes; caso privado sem condição de join não especificada fica dependente do contrato do anexo.
+
+**Aceite:** executar a cadeia inteira com usuário de teste; comentário protegido conforme percent, quiz persistido e XP único, progresso reaberto sem perda, próximo capítulo na mesma temporada, link Amazon correto. Não criar outro progresso por livro para suprir o painel.
+
+## 18. Canais frontend de Realtime não implementados
+
+**Referência no anexo:** §7 Canais no frontend, base e complemento; §14 Fases 2, 3, 6 e 8
+
+**Arquivos envolvidos:**
+
+- `src/lib/supabase/realtime.ts` — caminho proposto; não existe no snapshot.
+
+A publicação SQL de tabelas não cria consumidores do frontend. A árvore não possui módulo de subscriptions. Nomes exatos exigidos pelo anexo:
+
+| Canal | Uso literal |
+|---|---|
+| `comments:chapter:{chapter_id}` | comentários em tempo real por capítulo |
+| `reactions:comment:{comment_id}` | reações |
+| `video:{chapter_id}` | comentários sincronizados com o vídeo |
+| `notifications:{user_id}` | notificações pessoais |
+| `poll:{poll_id}` | votos em enquetes |
+| `feed:public` | novos posts do feed público |
+| `feed:user:{user_id}` | posts de quem o usuário segue |
+| `journal:{user_id}` | diário de leitura (próprio ou de amigos) |
+| `matches:{user_id}` | atualizações de match entre leitores |
+| `book:{book_id}:moods` | votos de humor/ritmo em tempo real |
+| `newsletter:issues` | novas edições publicadas |
+
+**Desenvolvimento:** criar uma assinatura por contexto visível da tela, aplicar filtros suportados por coluna, cancelar em desmontagem e reler views para conteúdo protegido/agregado. Não renderizar `payload.new.content` ignorando o anti-spoiler. O nome de canal não é autorização, e eventos de tabela com RLS restrita ao titular não representam votos/humores agregados da comunidade inteira.
+
+```ts
+import { supabase } from './client';
+export function watchChapterComments(chapterId:string,reload:()=>void) {
+  const channel=supabase.channel(`comments:chapter:${chapterId}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'comments',
+      filter:`chapter_id=eq.${chapterId}`},()=>reload()).subscribe();
+  return ()=>{void supabase.removeChannel(channel);};
+}
+export function watchOwnNotifications(userId:string,reload:()=>void) {
+  const channel=supabase.channel(`notifications:${userId}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'notifications',
+      filter:`user_id=eq.${userId}`},()=>reload()).subscribe();
+  return ()=>{void supabase.removeChannel(channel);};
+}
+```
+
+Aplicar o mesmo padrão a reações, vídeo, diário e matches, com `comment_id`, `chapter_id` e `user_id` apropriados. Em `feed:public`, reler `v_feed_posts_visible` filtrando visibility; em `feed:user`, reler projeção de follows/posts autorizados. Em `book:{book_id}:moods`, o voto bruto não deve ser exposto para satisfazer o nome do canal: após mutação própria reler `book_mood_stats`; atualização de todos os leitores exige contrato de eventos agregados que o anexo não especifica. Não inventar uma nova tabela de broadcast.
+
+**Aceite:** insert/update/delete refletidos nas telas, desconexão tratada, sem PII/gabarito/texto bloqueado no payload mostrado; testes autenticados A/B. Estado da publicação remota não foi catalogado nesta sessão.
+
+## 19. Perfil, XP, streak, badges, enquetes e ranking sem integração de produto
+
+**Referência no anexo:** Escopo P1; §14 Fase 3
+
+**Arquivos envolvidos:**
+
+- `src/app/perfil/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/ranking/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/BookPoll.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/gamification.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato:**
+
+> **P1:** perfil do leitor, XP, streak, badges, enquetes, ranking, agenda/lembretes.
+
+**Estado:** não há telas ou módulos de integração no snapshot. Endpoints de XP/voto estão ausentes no remoto; triggers têm as pendências já descritas, sem reapresentar seus corpos aqui.
+
+**Desenvolvimento:**
+
+1. Perfil público por `v_profiles_public`; parte própria por RPC privada, não SELECT integral de profiles.
+2. Mostrar `user_xp.total_xp/season_xp` e `user_streaks` da conta; não recalcular ledger no browser.
+3. Listar conquistas por `user_achievements` e definição de `achievements`; não conceder badges por INSERT do cliente. O SDD possui regras JSON e recompensas, mas não define um avaliador completo: condição de concessão não descrita deve ser explicitada antes de criar um motor novo.
+4. Enquete usa `book_polls`/`book_poll_options`, submissão pelo handler `vote-next-book`, refletindo contagem persistida.
+5. Ranking usa `v_season_ranking` filtrado por temporada, sem novo score.
+6. Agenda por meetings/RSVP e notificações pessoais, usando o cron do §8 para reminders.
+
+```ts
+import {supabase} from './client';
+export async function readerGamification(userId:string,seasonId:string) {
+  const results=await Promise.all([
+    supabase.from('user_xp').select('*').eq('user_id',userId).maybeSingle(),
+    supabase.from('user_streaks').select('*').eq('user_id',userId).maybeSingle(),
+    supabase.from('user_achievements').select('*,achievements(*)').eq('user_id',userId),
+    supabase.from('v_season_ranking').select('*').eq('season_id',seasonId)
+      .order('position',{ascending:true}),
+  ]);
+  for(const r of results) if(r.error) throw r.error;
+  return results.map(r=>r.data);
+}
+```
+
+**Aceite:** UI exibe dados persistidos corretos; voto atualizado via server, ranking por temporada, perfil não expõe campos pessoais; badges sem fabricar concessão que o SDD não especifica.
+
+## 20. Metadados, curadoria e comentários no player sem consumidores
+
+**Referência no anexo:** §14 Fase 5
+
+**Arquivos envolvidos:**
+
+- `src/components/BookMetadata.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/HostPrompt.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/TimedVideoComments.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/book-metadata.ts` — caminho proposto; não existe no snapshot.
+
+**Itens literais de produto/validação ainda sem implementação no repositório:**
+
+- Expor `v_host_prompt_results` no frontend (contagem "Concordo/Discordo/Não sei").
+- Expor `v_video_timed_comment_stats` no player do YouTube.
+- Aplicar `editorial_picks` e testar rotação mensal.
+
+**Desenvolvimento:** consultar metadados existentes, sem nova entidade de reviews/metadata; usar os agregados para votos/humor. UI do host prompt envia voto do titular em `host_prompt_votes` e relê `v_host_prompt_results`; gráfico por segundo usa `v_video_timed_comment_stats`, sem reinterpretar como legenda do vídeo. Curadoria filtra registros ativos e datas de início/fim definidos no schema; o anexo não fornece job de “rotação mensal” automática, portanto não inventar seleção de próximo livro.
+
+```ts
+import {supabase} from './client';
+export async function chapterCommunity(chapterId:string) {
+  const a=await supabase.from('v_host_prompt_results').select('*').eq('chapter_id',chapterId);
+  const b=await supabase.from('v_video_timed_comment_stats').select('*')
+    .eq('chapter_id',chapterId).order('video_sec',{ascending:true});
+  if(a.error) throw a.error;if(b.error) throw b.error;
+  return {prompts:a.data,video:b.data};
+}
+export async function voteHostPrompt(prompt_id:string,option_idx:number) {
+  const {data:{user},error}=await supabase.auth.getUser();
+  if(error||!user) throw error??new Error('unauthenticated');
+  const r=await supabase.from('host_prompt_votes').upsert({prompt_id,user_id:user.id,option_idx},
+    {onConflict:'prompt_id,user_id'});
+  if(r.error) throw r.error;
+}
+```
+
+**Aceite:** contagem de 0/1/2 representa opções literais, marcações do vídeo saltam para o segundo correto, curadoria não continua exibindo seleção expirada. Não foi executada UI do YouTube nesta análise.
+
+## 21. Diário, listas e Up Next sem interfaces do roadmap
+
+**Referência no anexo:** §14 Fase 6
+
+**Arquivos envolvidos:**
+
+- `src/app/diario/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/listas/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/listas/[slug]/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/UpNext.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/journal-lists.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato dos itens de interface:**
+
+- UI de diário (entrada por dia, mídia, mood).
+- UI de listas (criar, colaborar, compartilhar).
+- UI de "Up Next" (máx. 5 livros).
+
+**Desenvolvimento:**
+
+1. Diário grava na tabela existente por usuário, livro e data; o anexo não impõe UNIQUE por dia, portanto não proibir múltiplas sessões por nova constraint.
+2. Upload em `journal-media` com prefixo do titular; gravar `reading_journal_attachments` com caminho/MIME/tamanho. O bucket é privado e a policy original permite só o diretório do dono, mesmo quando entrada é pública; não inventar compartilhamento automático do arquivo por tornar body público.
+3. Listas reaproveitam colaboradores e itens após correção de recursão; respeitar `can_edit` e owner para gerenciar colaboradores.
+4. Up Next usa exatamente posições 1–5, UNIQUE por usuário/posição e PK usuário/livro existentes; não criar outra fila.
+5. Testar amigos mútuos conforme item literal “Testes RLS de `journal_visibility='friends'` com seguidores mútuos”.
+
+```ts
+import {supabase} from './client';
+export async function setUpNext(book_id:string,position:number) {
+  if(!Number.isInteger(position)||position<1||position>5) throw new Error('invalid_position');
+  const {data:{user},error}=await supabase.auth.getUser();
+  if(error||!user) throw error??new Error('unauthenticated');
+  const r=await supabase.from('user_up_next').upsert({user_id:user.id,book_id,position},
+    {onConflict:'user_id,book_id'});
+  if(r.error) throw r.error;
+}
+```
+
+A troca de posição de dois livros pode conflitar com UNIQUE se feita em dois UPDATEs isolados. Implementar reordenação transacional no servidor se o produto oferecer troca; o SDD pede prioridade, mas não especifica gesto de drag-and-drop. Não acrescentar o gesto como requisito.
+
+**Aceite:** entrada/arquivo/mood persistidos, compartilhamento de body conforme visibilidade, colaboração não altera lista alheia, sexto livro/posição é recusado pelo banco, mudança de fila não perde linhas. A publicação de likes de diário é extensão do repo; não é requisito novo deste documento.
+
+## 22. Milestones, médias de quiz, metas e desafios sem interface
+
+**Referência no anexo:** §14 Fase 7; P2 desafios anuais e estatísticas
+
+**Arquivos envolvidos:**
+
+- `src/components/MilestonePanel.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/estatisticas/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/metas/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/desafios/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/statistics.ts` — caminho proposto; não existe no snapshot.
+
+**Texto exato dos itens ainda dependentes de produto:**
+
+- Expor médias na UI de perfil e de capítulo.
+- Popular `reading_goals` e verificar `refresh_reading_goal_progress`.
+- Adicionar prompts de desafio (`challenge_prompts`).
+
+**Desenvolvimento:** usar médias persistidas, painel por milestones existentes, metas do próprio usuário e prompts de desafio. Não chamar funções trigger via RPC. `generate_milestones_for_season` já existe; executar para temporadas que comprovadamente não tenham seus marcos, sem repetir seed de Dom Casmurro (as cinco posições já foram observadas na API). Não definir conteúdo textual de novos prompts que não foi fornecido no anexo.
+
+```ts
+import {supabase} from './client';
+export async function statistics(userId:string,chapterId:string,seasonId:string) {
+  const r=await Promise.all([
+    supabase.from('user_quiz_averages').select('*').eq('user_id',userId).maybeSingle(),
+    supabase.from('chapter_quiz_averages').select('*').eq('chapter_id',chapterId).maybeSingle(),
+    supabase.from('v_user_reading_overview').select('*').eq('user_id',userId).maybeSingle(),
+    supabase.from('milestones').select('*').eq('season_id',seasonId).order('position'),
+    supabase.from('reading_goals').select('*,reading_goal_progress(*)').eq('user_id',userId),
+  ]);for(const x of r) if(x.error) throw x.error;return r.map(x=>x.data);
+}
+```
+
+**Aceite:** médias mudam após tentativa; metas e overview exibem o significado adotado na divergência §13; leitor só modifica própria meta/desafio; marcos na ordem da temporada. O SDD não fornece verificação automática completa de cada regra JSON de challenge, portanto não inventar regras de conclusão.
+
+## 23. Feed, clubes, follow e match sem telas do roadmap
+
+**Referência no anexo:** §14 Fase 8; P2 clubes criados por usuários e match
+
+**Arquivos envolvidos:**
+
+- `src/app/feed/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/clubes/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/clubes/[slug]/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/app/matches/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/social.ts` — caminho proposto; não existe no snapshot.
+
+**Itens literais:**
+
+- UI do feed com filtros (público / seguindo / clubes).
+- UI de match de leitores.
+
+**Desenvolvimento:**
+
+1. Feed consulta `v_feed_posts_visible`; filtra público/seguindo/clube, ordena `created_at`, respeita soft-delete e lock.
+2. Criação de post usa `author_id` da sessão; edição só titular. Mídia usa `feed_post_media` e signed URL conforme policy do post.
+3. Clubes criados por usuário em `user_clubs`, membros em `user_club_members`; reaproveitar contexto de leitura existente, não criar `clubs`.
+4. Seguir pessoas em `follows`; os estados são enum existente, sem inventar algoritmo de aceitação.
+5. Match chama `ai-user-embeddings` do próprio usuário, depois `match-readers` e lê cache pela RPC `get_reader_matches`; não colocar vetores em payload público.
+
+```ts
+import {supabase} from './client';
+export async function publicFeed() {
+  const r=await supabase.from('v_feed_posts_visible').select('*').eq('visibility','public')
+    .order('created_at',{ascending:false}).limit(30);
+  if(r.error) throw r.error;return r.data;
+}
+export async function computeMyMatches() {
+  const a=await supabase.functions.invoke('ai-user-embeddings',{body:{}});
+  if(a.error) throw a.error;
+  const b=await supabase.functions.invoke('match-readers',{body:{threshold:0.75,limit:20}});
+  if(b.error) throw b.error;return b.data;
+}
+```
+
+O limite de 30 no exemplo é uma página de consulta, não nova regra de produto; implementar paginação ao continuar lista. Rate limit de embeddings de 1h implica tratar 429 sem descartar matches anteriores.
+
+**Aceite:** filtros exibem somente posts autorizados, terceiros não veem clube/post privado, match não calcula outro usuário e cache fica pessoal. Sem deploy, integração real ainda não funciona.
+
+## 24. Assinaturas, newsletter e clique de afiliado sem integração de produto
+
+**Referência no anexo:** §14 Fase 9; §4.11; §9.8/9.9
+
+**Arquivos envolvidos:**
+
+- `src/app/assinatura/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/NewsletterSignup.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/AmazonBookLink.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/affiliate.ts` — caminho proposto; não existe no snapshot.
+- [supabase/functions/stripe-webhook/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/stripe-webhook/index.ts) — existente.
+- [supabase/functions/newsletter-dispatch/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/newsletter-dispatch/index.ts) — existente.
+
+**Itens literais:**
+
+- Rastreio de cliques de afiliado (`affiliate_clicks`).
+- Webhook de cancelamento e downgrade.
+
+**Estado:** sem consumidores no repo e endpoints de integração não publicados. O handler Stripe já trata eventos de subscription; não criar outro webhook só por este item. A confirmação de cancelamento/downgrade no provider não foi executada.
+
+**Desenvolvimento:**
+
+1. Mostrar planos já existentes; não inserir preços novos ou outros tiers.
+2. Configurar no Stripe o endpoint `stripe-webhook`, secrets e eventos coerentes com o handler atual. Testar atualização/cancelamento e associação ao usuário; assinatura não deve ser editada pelo browser.
+3. Newsletter registra inscrição pela entidade existente, estado `pending`; o SDD define campos de confirmação, mas não fornece workflow/token de double opt-in. Não inventar endpoint de confirmação ou regras de consentimento além do contrato; registrar essa especificação pendente se o produto exigir operação completa.
+4. Corrigir o filtro do seed (§15), configurar remetente/provider e disparar por admin somente após autorização de teste apropriada.
+5. Link Amazon grava clique na tabela existente, sem impedir navegação se logging falhar.
+
+```ts
+// src/lib/supabase/affiliate.ts — não envia IP bruto
+import {supabase} from './client';
+export async function trackAffiliate(book_id:string,target_url:string,tag:string|null) {
+  const {data:{user}}=await supabase.auth.getUser();
+  const result=await supabase.from('affiliate_clicks').insert({
+    book_id,user_id:user?.id??null,target_url,tag,
+    referrer:document.referrer||null,user_agent:navigator.userAgent,
+  });
+  return !result.error;
+}
+```
+
+O anexo contém `ip_hash`, mas não fornece política de hashing/salt/retencão. Não derivar hash de IP no browser nem inserir dado inventado; deixar null enquanto não existir contrato definido.
+
+**Aceite:** cliques registrados, falha de logging não bloqueia link; eventos Stripe autenticados atualizam assinatura certa e replays não duplicam; newsletter aplica a audiência decidida e registra entregas. Checkout, criação de payment link e entitlement automático não têm implementação especificada no anexo: não acrescentar código arbitrário para esses serviços.
+
+## 25. Atividades, caderno interativo e cards sem interfaces
+
+**Referência no anexo:** §14 Fase 10
+
+**Arquivos envolvidos:**
+
+- `src/app/capitulos/[id]/atividades/page.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/ChapterActivity.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/ChapterPromptResponses.tsx` — caminho proposto; não existe no snapshot.
+- `src/components/SocialCard.tsx` — caminho proposto; não existe no snapshot.
+- `src/lib/supabase/activities.ts` — caminho proposto; não existe no snapshot.
+- [supabase/functions/social-render-card/index.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/supabase/functions/social-render-card/index.ts) — existente.
+
+**Texto exato:**
+
+- UI de atividades (`crossword`, `quiz`, `flashcards`, `poll`, ...).
+- UI de caderno interativo (`chapter_prompt_responses`).
+- Módulo de geração de cards para redes sociais.
+
+**Desenvolvimento:**
+
+1. Carregar atividades publicadas por capítulo, com `payload`/tipo existentes; implementar somente interações descritas no payload real ou no seed do anexo. O enum lista outros tipos, mas não fornece motor de jogo completo de cada um.
+2. Persistir tentativa do titular na tabela existente; não inventar cálculo de score para atividade sem gabarito/rubrica definidos no SDD.
+3. Caderno carrega `chapter_prompts`, grava `chapter_prompt_responses` do titular e respeita visibilidade.
+4. Cards chama `social-render-card`; alinhar payload/retorno conforme §13. O anexo só enfileira job, e não desenha templates para cada kind. Não chamar o SVG único atual de implementação completa dos sete templates.
+
+```ts
+import {supabase} from './client';
+export async function chapterActivities(chapterId:string) {
+  const r=await supabase.from('chapter_activities').select('*')
+    .eq('chapter_id',chapterId).eq('status','published').order('position');
+  if(r.error) throw r.error;return r.data;
+}
+export async function savePrompt(prompt_id:string,response:string,
+  visibility:'private'|'friends'|'club'|'public') {
+  const {data:{user},error}=await supabase.auth.getUser();
+  if(error||!user) throw error??new Error('unauthenticated');
+  const r=await supabase.from('chapter_prompt_responses').upsert({
+    prompt_id,user_id:user.id,response,visibility,
+  },{onConflict:'prompt_id,user_id'});
+  if(r.error) throw r.error;
+}
+```
+
+**Aceite:** atividade publicada correta, tentativa persistida, resposta própria relida com visibilidade, job/card sem perda de payload. Renderização PNG, export para redes específicas e desenho de novas templates não são especificações do anexo e não foram inventadas.
+
+## 26. Reconciliar histórico antes do replay e completar validação final
+
+**Referência no anexo:** §3.1; §14 Fase 11 e Validação final
+
+**Arquivos envolvidos:**
+
+- [docs/deployment-status.md](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/docs/deployment-status.md) — existente.
+- [docs/implementation-blockers.md](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/docs/implementation-blockers.md) — existente.
+- [scripts/security-smoke/test.mjs](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/scripts/security-smoke/test.mjs) — existente.
+- [scripts/security-smoke/business-rules.mjs](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/scripts/security-smoke/business-rules.mjs) — existente.
+- [scripts/integration-smoke/test.ts](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/scripts/integration-smoke/test.ts) — existente.
+- [.github/workflows/ci.yml](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/.github/workflows/ci.yml) — existente.
+- `docs/openapi.yaml` — caminho proposto; não existe no snapshot.
+- `supabase/tests/sdd_contract.test.sql` — caminho proposto; não existe no snapshot.
+
+**Texto literal de validação ainda não demonstrada ponta a ponta:**
+
+- Auditar índices (`explain analyze` em feed, match, quiz).
+- Testes RLS cruzados entre: diário, listas, feed, match, newsletter.
+- Testes RLS (`supabase test db`) com múltiplos usuários.
+- Testes de Edge Functions (`supabase functions serve` + `curl`).
+- Auditoria de índice (`explain analyze` nas queries críticas).
+- Backup automático + monitoramento (`pg_stat_statements`).
+- Documentar contratos no OpenAPI/Swagger interno.
+
+Os dois itens de auditoria de índice representam a mesma entrega: executá-la uma vez e associar as duas referências, sem duplicar tarefa ou código.
+
+**Estado e desenvolvimento:**
+
+1. Os smoke tests existentes rodaram e passaram nesta sessão. Eles inicializam schemas/stubs próprios, não aplicam toda a sequência real a uma base vazia nem cobrem as seis policies recursivas identificadas. Acrescentar cenários reais, sem criar um segundo sistema de teste paralelo.
+2. Corrigir o stub de `is_admin` e incluir triggers de reação/reply/streak/feed com grants finais. A mera troca do stub para invoker também deixou os asserts existentes aprovados: eles não exercem esse caminho diretamente. Acrescentar a chamada explícita e operações normais do usuário.
+3. Em ambiente isolado, listar migrations remotas e locais; mapear versões `sdd_*` aos objetos correspondentes e aos arquivos existentes. Não inventar mapeamento 1:1 só por timestamps.
+4. Gerar plano de reconciliação revisável. Não executar `db push`, reset remoto ou reaplicar bundles antes disso. Reset local com seeds deve ser verificado em banco completo, não somente parser SQL.
+5. Executar harness de Auth/Storage/Realtime com dois usuários, titular/admin e terceiros; guardar endpoint, identidade, esperado, observado, status e cleanup. O harness do repo bloqueia o ref de produção; usar ambiente apropriado, sem interpretar como pedido de uma nova branch paga nesta tarefa.
+6. Após publicar funções, testar os dez contratos, provider errors e respostas autorizadas; registrar que teste com curl local não equivale a integração remota.
+7. `EXPLAIN (ANALYZE, BUFFERS)` nas consultas críticas com volume representativo, usando acesso autorizado; não remover índices com base apenas em aviso de unused.
+8. Conferir backup automático e pg_stat_statements por administração do projeto. São não verificáveis aqui; não marcar como desabilitados.
+9. Criar OpenAPI dos handlers e seus contratos efetivos, sem credenciais reais. A raiz PostgREST com publishable key recusou metadados; não confundir documentação de REST de tabelas com documentação de Edge Functions.
+
+**Exemplo de arquivo proposto de contrato:**
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Diyspur — contratos previstos no SDDBD2
+  version: 1.0.0
+servers:
+  - url: https://xjhehhfhhoomblcggjpk.supabase.co
+paths:
+  /functions/v1/quiz-validate:
+    post:
+      operationId: validateQuiz
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapter_id, answers, request_id]
+              properties:
+                chapter_id: {type: string, format: uuid}
+                request_id: {type: string, format: uuid}
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    required: [question_id, chosen_idx]
+                    properties:
+                      question_id: {type: string, format: uuid}
+                      chosen_idx: {type: integer, minimum: 0}
+      responses:
+        '200': {description: Tentativa validada e XP concedido}
+        '400': {description: Payload inválido ou incompleto}
+        '401': {description: Sem sessão válida}
+        '403': {description: Capítulo não disponível}
+        '404': {description: Capítulo ou quiz não encontrado}
+        '422': {description: Quiz ou opção fora da configuração aceita}
+        '429': {description: Limite de tentativas}
+        '503': {description: Dependência indisponível ou XP pendente}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+```
+
+Expandir o arquivo para os outros nove handlers com parâmetros/respostas retirados da fonte atual, após decisão sobre divergências; não inventar endpoints que o SDD não pede.
+
+**Aceite:** todos os itens acima têm evidência do ambiente certo; testes locais sem falsos stubs; OpenAPI atualizado; nenhum resultado não executado apresentado como aprovado.
+
+## 27. Inconsistências do anexo que impedem igualdade literal sem uma decisão
+
+**Referência no anexo:** §2, §4.2, §6.3.3/5, §6.4.8, §9, §11 e §13.4
+
+**Arquivos envolvidos:**
+
+- [SDDBD2.md](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/SDDBD2.md) — existente.
+- [docs/implementation-blockers.md](https://github.com/diyspur-cloud/db/blob/dc891b689b9937b8d286fc6b622c06927d8d4f64/docs/implementation-blockers.md) — existente.
+
+Estas são diferenças entre o texto anexado e o caminho executável encontrado, ou lacunas da própria especificação que afetam as pendências. Não são novos requisitos de produto.
+
+1. **Ordem de citext:** `profiles.username` usa citext antes do `create extension` no bloco original de profiles. O repo antecipa instalação para a migration anterior. Reverter a ordem só para imitar o anexo quebra base limpa; registrar a correção técnica e não criar outra migration de profiles.
+2. **Timestamp duplicado:** o anexo usa `20260101001650` para enums complementares e Storage complementar. O repo dá `01651` ao Storage. É diferença necessária para duas versões distintas; usar o arquivo real sem duplicar o original.
+3. **`public.clubs`:** a view do SDD referencia uma entidade sem DDL; o repo usa `user_clubs` com contexto. Resolver pela relação existente como descrito em §12, sem inventar `clubs`.
+4. **`book_reviews`:** o SDD usa a tabela no snapshot/MV mas não define suas colunas, constraints e RLS. O repo já criou essa dependência. Não recriá-la e não inferir uma definição alternativa de review para preencher o anexo.
+5. **Criação de comentário:** exemplo §13.4 não envia `user_id`, obrigatório, sem default. O consumidor deve incluir identidade autenticada (§17). Não adicionar default mágico que mude ownership.
+6. **XP de streak:** 25 pontos definidos, condição/ref não definidos (§9 deste documento). Falta especificação para uma implementação completa e fiel.
+7. **Badges/desafios:** rule JSON/seed descreve alguns exemplos, mas falta motor e pontos de acionamento completos. A UI pode exibir os registros existentes; concessão automática sem condição explicada seria invenção.
+8. **Games:** enum lista tipos, mas sem estrutura completa de payload/gabarito/rubrica para todos. Implementar somente payload documentado/seed; restantes precisam de especificação, sem extrapolar jogos.
+9. **Cards:** handler do SDD é placeholder de worker; tipos listados não definem layout. A fonte atual renderiza SVG genérico, o que é diferença de execução, não especificação completa de templates.
+10. **Integrações Discord/Google Calendar:** aparecem na arquitetura e no quadro final do anexo, sem handler, contrato de evento, gatilho, assinatura ou código de integração. Não foi localizado código dessas integrações no repo. Registrar como previsão não concretizada, sem inventar função `discord-*`/`calendar-*`, mensagens ou ações externas.
+11. **httpOnly/browser client:** declaração do §10 conflita com client browser/SSR padrão; depende de escolha arquitetural explicitada em §16.
+12. **Newsletter `tags`:** campo do seed e comportamento do handler do SDD divergem; fonte nova rejeita o seed (§15). Não escolher semântica de audiência silenciosamente.
+13. **Contagem de livros:** SQL antigo de metas/overview conta progresso por capítulo com rótulo livro; fonte recente corrige (§13). Não duplicar uma segunda contagem “literal” para manter o erro.
+14. **Seeds operacionais:** vídeo placeholder, nenhum conjunto completo de reuniões no seed-base, textos/layouts de jogos e prompts não exaustivos. O seed é demonstrativo. Não inventar dados reais para simular conclusão de calendário/vídeo.
+15. **Arquivos compartilhados anunciados:** árvore do anexo prevê `_shared/supabaseAdmin.ts` e `_shared/types.ts`, mas não fornece conteúdo. A fonte utiliza `_shared/auth.ts` para clientes/auth e tipos locais/gerados. Não criar módulos vazios duplicados apenas para igualar nomes; registrar diferença de organização, sem classificá-la como funcionalidade ausente.
+16. **Nome na arquitetura:** diagrama menciona `next-book-vote`, mas §9.3/9.12 exigem `vote-next-book`. O handler real usa o nome da seção executável; não publicar uma segunda função alias sem requisito.
+
+**Passo a passo documental:** para cada conflito, manter o texto original da referência, anexar a divergência concreta e explicitar se a mudança é correção técnica, compatibilidade de API ou regra de negócio ainda indefinida. Este novo documento não substitui silenciosamente os requisitos anexados por requisitos do README modificado.
+
+## 28. Código completo proposto para os quatro triggers internos da seção 4
+
+**Arquivo a criar:** `supabase/migrations/<timestamp>_restore_internal_counter_triggers.sql`.
+
+Os corpos abaixo foram derivados das funções existentes citadas em §4, mantendo os algoritmos do anexo. Mudam schema, privilégios e qualificação de nomes para que os efeitos internos funcionem sob os grants atuais. Executar as declarações abaixo antes dos REVOKEs e da troca dos triggers da seção 4.
+
+```sql
+create or replace function private.bump_comment_likes()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    update public.comments set likes_count = likes_count + 1 where id = new.comment_id;
+  elsif tg_op = 'DELETE' then
+    update public.comments set likes_count = likes_count - 1 where id = old.comment_id;
+  end if;
+  return null;
+end $$;
+```
+
+```sql
+create or replace function private.bump_comment_replies()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' and new.parent_id is not null then
+    update public.comments set replies_count = replies_count + 1 where id = new.parent_id;
+  elsif tg_op = 'DELETE' and old.parent_id is not null then
+    update public.comments set replies_count = replies_count - 1 where id = old.parent_id;
+  end if;
+  return null;
+end $$;
+```
+
+```sql
+create or replace function private.touch_streak()
+returns trigger language plpgsql security definer set search_path = '' as $$
+declare
+  v_user uuid;
+  v_last date;
+  v_today date := current_date;
+  v_curr int;
+  v_long int;
+begin
+  -- quem gerou atividade?
+  if tg_table_name = 'user_progress' then v_user := new.user_id;
+  elsif tg_table_name = 'xp_events'   then v_user := new.user_id;
+  else return null; end if;
+
+  select last_activity_at, current_streak, longest_streak
+    into v_last, v_curr, v_long
+  from public.user_streaks where user_id = v_user for update;
+
+  if v_last = v_today then return null; end if;
+
+  if v_last = v_today - 1 then
+    v_curr := coalesce(v_curr,0) + 1;
+  else
+    v_curr := 1;
+  end if;
+  v_long := greatest(coalesce(v_long,0), v_curr);
+
+  update public.user_streaks
+     set current_streak = v_curr,
+         longest_streak = v_long,
+         last_activity_at = v_today,
+         updated_at = now()
+   where user_id = v_user;
+
+  return null;
+end $$;
+```
+
+```sql
+create or replace function private.bump_feed_post_counters()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_table_name = 'feed_post_likes' then
+    if tg_op = 'INSERT' then
+      update public.feed_posts set likes_count = likes_count + 1 where id = new.post_id;
+    elsif tg_op = 'DELETE' then
+      update public.feed_posts set likes_count = greatest(likes_count - 1, 0) where id = old.post_id;
+    end if;
+  elsif tg_table_name = 'feed_post_comments' then
+    if tg_op = 'INSERT' then
+      update public.feed_posts set comments_count = comments_count + 1 where id = new.post_id;
+    elsif tg_op = 'DELETE' then
+      update public.feed_posts set comments_count = greatest(comments_count - 1, 0) where id = old.post_id;
+    end if;
+  end if;
+  return null;
+end $$;
+```
+
+## 29. Evidência de falhas e diferenças efetivamente observadas
+
+Esta listagem contém somente falhas, diferenças e limitações relevantes; não detalha endpoints aprovados. Cada resposta é do projeto informado, obtida sem mutations. `[]` com limit=0 não constitui teste de dados.
+
+**GET `/rest/v1/buddy_read_checkpoints?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"buddy_reads\""}
+```
+
+**GET `/rest/v1/buddy_read_members?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"buddy_read_members\""}
+```
+
+**GET `/rest/v1/buddy_reads?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"buddy_reads\""}
+```
+
+**GET `/rest/v1/reading_list_collaborators?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"reading_list_collaborators\""}
+```
+
+**GET `/rest/v1/reading_list_items?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"reading_list_collaborators\""}
+```
+
+**GET `/rest/v1/reading_lists?select=*&limit=0` — HTTP 500**
+
+```json
+{"code":"42P17","details":null,"hint":null,"message":"infinite recursion detected in policy for relation \"reading_lists\""}
+```
+
+**GET `/rest/v1/rpc/is_admin` — HTTP 401**
+
+```json
+{"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.profiles TO anon;","message":"permission denied for table profiles"}
+```
+
+**GET `/rest/v1/v_club_progress_panel?select=finished_count,reading_count,not_started_count&limit=0` — HTTP 400**
+
+```json
+{"code":"42703","details":null,"hint":null,"message":"column v_club_progress_panel.finished_count does not exist"}
+```
+
+**GET `/rest/v1/v_book_community_stats?select=mood_percent,sample_size,ratings_count,avg_spice_level&limit=0` — HTTP 400**
+
+```json
+{"code":"42703","details":null,"hint":null,"message":"column v_book_community_stats.mood_percent does not exist"}
+```
+
+**GET `/functions/v1/vote-next-book` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/quiz-validate` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/stripe-webhook` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/match-readers` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/ai-recommendations` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/award-xp` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/newsletter-dispatch` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/ai-user-embeddings` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/social-render-card` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+**GET `/functions/v1/scheduled-reminders` — HTTP 404**
+
+```json
+{"code":"NOT_FOUND","message":"Requested function was not found"}
+```
+
+### Verificação local dos patches apresentados
+
+| Código proposto | Verificação efetivamente executada | Limite |
+|---|---|---|
+| Helper/policy de buddy read | As três relações reproduziram 42P17 antes; após patch, SELECT funcionou; anon viu só registro público entre público/privado de teste | Não valida join/leave remoto nem JWT real |
+| Helper/policy de listas | As três relações reproduziram 42P17 antes; após patch, SELECT funcionou; anon viu só lista pública entre pública/privada de teste | Não valida colaboração completa nem Storage |
+| Helper privado de admin | Compilou com enum user_role e consulta invoker deixou de falhar | Papéis reais de usuário/admin ainda precisam de teste isolado completo |
+| Triggers privados de likes/replies/streak | INSERT com role authenticated deixou de retornar 42501 | Reprodução reduzida; não mede concorrência ou payload Supabase |
+| Patches de stats de livros e painel de clubes | Aplicados mantendo nomes/tipos das colunas atuais e acrescentando aliases | Sem dados representativos e sem isolamento remoto A/B |
+| Replay da view antiga de clube | Falhou 42803; erro do alias de title identificado e descrito em §12 | Não prova equivalência entre fonte e DDL efetivo remoto |
+
+Os testes de patches foram executados somente em scratch/PGlite; o projeto hospedado não foi alterado.
+
+### Limitações dos testes realizados
+
+Os smoke tests do repositório passaram localmente. A reprodução adicional de `is_admin`, reação, resposta e progresso mostrou SQLSTATE 42501 com grants compatíveis e funções invoker extraídas da fonte. Essas reproduções não foram executadas no remoto.
+
+A chave pública permite consultas às rotas de tabelas, mas não forneceu catálogo SQL, secrets ou inventário administrativo. `GET /storage/v1/bucket` retornou lista vazia sob anon; não foi usado como prova de falta de buckets. `GET /rest/v1/` retornou 401 “Secret API key required”; isso limita OpenAPI administrativo, não significa que toda a API REST está bloqueada.
+
+Não houve cadastro de conta, login real, envio de e-mail, voto, quiz, upload, pagamento, deploy, cron ou migration nesta análise. As tarefas de desenvolvimento apresentadas são propostas para revisão, não alterações efetuadas.
+
+## 30. Referências de implementação e documentação consultada
+
+A fonte normativa é o anexo `SDDBD2.md`, não sua versão alterada no Git. Referências estáticas deste documento apontam para o commit fixo da análise, evitando confundir alterações posteriores com o snapshot examinado.
+
+Documentação oficial consultada para instruções operacionais (não acrescenta funcionalidades ao escopo):
+
+- [Changelog Supabase](https://supabase.com/changelog.md).
+- [Scheduling Edge Functions](https://supabase.com/docs/guides/functions/schedule-functions).
+- [Migrating to publishable and secret API keys](https://supabase.com/docs/guides/getting-started/migrating-to-new-api-keys).
+- [Supabase Auth em Edge Functions](https://supabase.com/docs/guides/functions/auth-legacy-jwt).
+
+Os exemplos de cron foram adaptados ao header exigido pelo código existente. Publishable key identifica acesso público de baixo privilégio, não substitui JWT de usuário, assinatura Stripe nem autorização administrativa. Os secrets fornecidos por provedores não foram inventados nem incluídos neste arquivo.

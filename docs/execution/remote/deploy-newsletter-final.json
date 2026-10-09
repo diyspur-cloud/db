@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514868736,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_32abfe39-6eb9-4fa6-a71c-27035987aa38_8/source/newsletter-dispatch/index.ts",
+  "ezbr_sha256": "4dca8a6ee1b60a1726f9a67083f4364cbcbee03d875f6a57b7b79849f5779872",
+  "id": "32abfe39-6eb9-4fa6-a71c-27035987aa38",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_32abfe39-6eb9-4fa6-a71c-27035987aa38_8/source/deno.json",
+  "name": "newsletter-dispatch",
+  "slug": "newsletter-dispatch",
+  "status": "ACTIVE",
+  "updated_at": 1791517884620,
+  "verify_jwt": true,
+  "version": 8
+}

@@ -1,0 +1,51 @@
+[
+  {
+    "evidence": {
+      "rls_tables": 77,
+      "public_tables": 77,
+      "internal_calls": [
+        {
+          "anon": false,
+          "proname": "award_daily_streak_bonus",
+          "service_role": true,
+          "authenticated": false
+        },
+        {
+          "anon": false,
+          "proname": "bump_comment_likes",
+          "service_role": false,
+          "authenticated": false
+        },
+        {
+          "anon": false,
+          "proname": "bump_comment_replies",
+          "service_role": false,
+          "authenticated": false
+        },
+        {
+          "anon": false,
+          "proname": "bump_feed_post_counters",
+          "service_role": false,
+          "authenticated": false
+        },
+        {
+          "anon": false,
+          "proname": "touch_streak",
+          "service_role": false,
+          "authenticated": false
+        }
+      ],
+      "public_definers": [
+        "handle_new_user",
+        "generate_milestones_for_season",
+        "refresh_book_mood_stats",
+        "refresh_user_quiz_averages",
+        "refresh_content_warning_votes",
+        "rls_auto_enable",
+        "trg_refresh_book_mood_stats",
+        "refresh_reading_goal_progress",
+        "refresh_chapter_quiz_averages"
+      ]
+    }
+  }
+]

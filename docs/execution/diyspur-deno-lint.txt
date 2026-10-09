@@ -1,0 +1,2 @@
+[0m[32mTask[0m [0m[36mlint[0m deno lint _shared/auth.ts _shared/cors.ts award-xp/index.ts vote-next-book/index.ts scheduled-reminders/index.ts ai-recommendations/index.ts ai-user-embeddings/index.ts match-readers/index.ts newsletter-dispatch/index.ts stripe-webhook/index.ts social-render-card/index.ts quiz-validate/index.ts generate-book-embeddings/index.ts
+Checked 13 files

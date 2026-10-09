@@ -1,0 +1,20 @@
+{
+  "project_id": "xjhehhfhhoomblcggjpk",
+  "functions": [
+    "quiz-validate",
+    "award-xp",
+    "vote-next-book",
+    "scheduled-reminders",
+    "ai-recommendations",
+    "ai-user-embeddings",
+    "match-readers",
+    "newsletter-dispatch",
+    "stripe-webhook",
+    "social-render-card"
+  ],
+  "verify_jwt_false": [
+    "stripe-webhook",
+    "scheduled-reminders"
+  ],
+  "note": "Publicar somente ap\u00f3s check/lint/fmt. Requests de neg\u00f3cio n\u00e3o testados sem credenciais pr\u00f3prias."
+}

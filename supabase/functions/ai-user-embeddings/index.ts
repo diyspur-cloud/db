@@ -37,15 +37,17 @@ Deno.serve(async (req) => {
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) return json({ error: "embeddings_unavailable" }, 503);
     const service = serviceClient();
-    const { data: previous, error: previousError } = await service.from(
-      "user_reading_embeddings",
-    )
-      .select("updated_at").eq("user_id", user.id).maybeSingle();
-    if (previousError) return json({ error: "temporarily_unavailable" }, 503);
-    if (
-      previous?.updated_at &&
-      Date.now() - Date.parse(previous.updated_at) < 60 * 60_000
-    ) {
+    const { data: allowed, error: rateError } = await service.rpc(
+      "take_rate_limit",
+      {
+        p_user: user.id,
+        p_bucket: "ai-user-embeddings",
+        p_limit: 1,
+        p_window_seconds: 60 * 60,
+      },
+    );
+    if (rateError) return json({ error: "temporarily_unavailable" }, 503);
+    if (allowed !== true) {
       return json({ error: "rate_limited", retry_after_seconds: 3600 }, 429);
     }
     const { data: snapshot, error: snapshotError } = await service.rpc(

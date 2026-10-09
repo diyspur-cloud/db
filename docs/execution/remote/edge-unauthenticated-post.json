@@ -1,0 +1,52 @@
+[
+  {
+    "function": "quiz-validate",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "award-xp",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "vote-next-book",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "scheduled-reminders",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "ai-recommendations",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "ai-user-embeddings",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "match-readers",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "newsletter-dispatch",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+    "function": "stripe-webhook",
+    "status": 503,
+    "body": "webhook not configured"
+  },
+  {
+    "function": "social-render-card",
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  }
+]

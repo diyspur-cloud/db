@@ -36,6 +36,7 @@ select c.id, 1, 'Quem narra Dom Casmurro?',
        '["Capitu","Bentinho","José Dias","Ezequiel"]'::jsonb, 1,
        'Bentinho é o narrador em primeira pessoa.'
 from public.chapters c where c.number = 1
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
 ON CONFLICT (chapter_id, position) DO NOTHING;
 
 -- Pergunta do anfitrião do Cap. 3
@@ -43,6 +44,7 @@ insert into public.host_prompts (chapter_id, question, options)
 select c.id, 'José Dias realmente estava tentando ajudar Bentinho?',
        '["Concordo","Discordo","Ainda não sei"]'::jsonb
 from public.chapters c where c.number = 3
+  and c.season_id = '33333333-3333-3333-3333-333333333333'
   AND NOT EXISTS (SELECT 1 FROM public.host_prompts hp WHERE hp.chapter_id = c.id AND hp.question = 'José Dias realmente estava tentando ajudar Bentinho?');
 
 -- Conquistas padrão

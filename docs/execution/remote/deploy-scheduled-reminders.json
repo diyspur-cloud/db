@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514800128,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_025992c8-d84b-4c39-b10f-afe5fd5e19ca_1/source/scheduled-reminders/index.ts",
+  "ezbr_sha256": "eee2ee06759e582d9b199c4aef198f1345de0b074f7cbcba9ce4988f8fdc3e62",
+  "id": "025992c8-d84b-4c39-b10f-afe5fd5e19ca",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_025992c8-d84b-4c39-b10f-afe5fd5e19ca_1/source/deno.json",
+  "name": "scheduled-reminders",
+  "slug": "scheduled-reminders",
+  "status": "ACTIVE",
+  "updated_at": 1791514800128,
+  "verify_jwt": false,
+  "version": 1
+}

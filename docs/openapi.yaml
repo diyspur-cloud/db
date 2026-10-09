@@ -1,0 +1,1039 @@
+openapi: 3.1.0
+info:
+  title: API backend DIY Spur
+  version: 1.0.0
+  description: |
+    Contrato HTTP dos dez Edge Functions do backend. As operações que usam
+    `BearerAuth` aceitam somente um token Bearer validado pelo Supabase; o
+    usuário retornado por `auth.getUser` é a identidade efetiva da operação.
+    A operação de newsletter exige ainda que esse usuário tenha `role=admin`
+    no perfil. As funções agendadas e o webhook Stripe usam seus próprios
+    segredos e não aceitam Bearer como substituto.
+servers:
+  - url: https://{project-ref}.supabase.co/functions/v1
+    description: Base das Edge Functions do Supabase
+    variables:
+      project-ref:
+        default: seu-projeto
+        description: Identificador do projeto Supabase
+security: []
+tags:
+  - name: Quiz
+    description: Validação de respostas de quiz e idempotência de tentativas
+  - name: XP
+    description: Atribuição de experiência por atividade
+  - name: Votação
+    description: Votação do próximo livro
+  - name: Agendamento
+    description: Criação de lembretes para reuniões próximas
+  - name: Recomendações
+    description: Recomendações e embeddings de leitura
+  - name: Leitores
+    description: Correspondência entre leitores
+  - name: Newsletter
+    description: Despacho administrativo de newsletters
+  - name: Pagamentos
+    description: Recebimento de eventos Stripe
+  - name: Social
+    description: Renderização de cartões sociais
+paths:
+  /quiz-validate:
+    post:
+      tags: [Quiz]
+      operationId: quizValidate
+      summary: Valida um quiz e atribui XP
+      description: |
+        Valida todas as respostas do capítulo para o usuário autenticado,
+        registra a tentativa e atribui 50 XP. `Idempotency-Key` tem precedência
+        sobre `request_id`. Para compatibilidade, se nenhuma chave for enviada
+        o servidor gera uma UUID nova; para que um retry retorne a tentativa
+        persistida, o cliente deve reenviar a mesma UUID em `Idempotency-Key`
+        (ou em `request_id`). O campo `user_id`, quando enviado, deve ser o
+        mesmo usuário do Bearer.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuizValidateRequest'
+      responses:
+        '200':
+          description: Tentativa validada; `duplicate` indica uma tentativa já registrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizValidateResponse'
+        '400':
+          description: JSON ou payload inválido, ou respostas incompletas/inesperadas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                erro:
+                  value: {error: invalid_payload_or_missing_idempotency_key}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: Usuário incompatível no payload ou capítulo ainda não disponível.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                identidade:
+                  value: {error: forbidden}
+                disponibilidade:
+                  value: {error: chapter_not_available}
+        '404':
+          description: Capítulo ou quiz não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                capitulo:
+                  value: {error: chapter_not_found}
+                quiz:
+                  value: {error: quiz_not_found}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '422':
+          description: Quiz maior que 50 perguntas ou configuração/resposta inválida.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                tamanho:
+                  value: {error: quiz_too_large}
+                configuracao:
+                  value: {error: invalid_quiz_configuration_or_answer}
+        '429':
+          description: Limite de tentativas atingido; aguardar 60 segundos.
+          headers:
+            Retry-After:
+              description: Segundos até uma nova tentativa.
+              schema: {type: integer, const: 60}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitedError'
+              example: {error: rate_limited, retry_after_seconds: 60}
+        '503':
+          description: Indisponibilidade temporária, falha ao registrar, ou XP pendente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                temporario:
+                  value: {error: temporarily_unavailable}
+                xp_pendente:
+                  value: {error: xp_award_pending, attempt_id: 00000000-0000-4000-8000-000000000000}
+                servidor:
+                  value: {error: server_misconfigured_or_unavailable}
+
+  /award-xp:
+    post:
+      tags: [XP]
+      operationId: awardXp
+      summary: Atribui XP por uma atividade verificada
+      description: |
+        A referência da atividade é uma UUID e é verificada no servidor antes
+        da atribuição. Para `streak_bonus`, `ref_id` é opcional e é
+        deliberadamente ignorado: a RPC deriva a referência do dia atual,
+        exige a atividade do dia e impede duplicatas. Os valores de XP são
+        `join_meeting=10`, `finish_chapter=20`, `comment=30`,
+        `quiz_answer=50`, `finish_book=100` e `streak_bonus=25`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwardXpRequest'
+      responses:
+        '200':
+          description: XP atribuído ou bônus diário já registrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwardXpResponse'
+        '400':
+          description: JSON, fonte ou referência de atividade inválidos.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                json:
+                  value: {error: invalid_json}
+                atividade:
+                  value: {error: unsupported_or_invalid_activity}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: Atividade não verificada ou bônus diário inelegível.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                atividade:
+                  value: {error: activity_not_verified}
+                streak:
+                  value: {error: streak_bonus_not_eligible}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '503':
+          description: Falha temporária ou falha ao atribuir XP.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                xp:
+                  value: {error: could_not_award_xp}
+                servidor:
+                  value: {error: server_misconfigured_or_unavailable}
+
+  /vote-next-book:
+    post:
+      tags: [Votação]
+      operationId: voteNextBook
+      summary: Registra o voto do usuário no próximo livro
+      description: A RPC rejeita uma enquete fechada e garante que a opção pertença à enquete.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoteNextBookRequest'
+      responses:
+        '200':
+          description: Voto registrado; `votes` contém o resultado devolvido pela RPC.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, votes]
+                properties:
+                  ok: {type: boolean, const: true}
+                  votes:
+                    description: Resultado de contagem retornado por `cast_book_poll_vote`.
+        '400':
+          description: JSON/payload inválido ou opção que não pertence à enquete.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                payload:
+                  value: {error: invalid_payload}
+                opcao:
+                  value: {error: option_not_in_poll}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '409':
+          description: A enquete está fechada.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: poll_closed}
+        '503':
+          description: Falha temporária na RPC ou no servidor.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                temporario:
+                  value: {error: temporarily_unavailable}
+                servidor:
+                  value: {error: server_misconfigured_or_unavailable}
+
+  /scheduled-reminders:
+    post:
+      tags: [Agendamento]
+      operationId: scheduledReminders
+      summary: Cria lembretes de reuniões nas próximas 48 horas
+      description: |
+        Processa reuniões com status `scheduled` cujo horário esteja entre
+        agora e 48 horas, e somente RSVP com `attending=true`. A autenticação
+        é feita exclusivamente pelo segredo constante no header
+        `x-scheduled-reminders-secret`; não há autenticação Bearer nesta função.
+      security:
+        - ScheduledRemindersSecret: []
+      parameters:
+        - $ref: '#/components/parameters/ScheduledRemindersSecret'
+      responses:
+        '200':
+          description: Processamento concluído.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRemindersResponse'
+        '401':
+          description: Header ausente ou segredo incorreto.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '503':
+          description: Falha ao consultar reuniões/RSVP ou ao entregar lembretes.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: temporarily_unavailable}
+
+  /ai-recommendations:
+    post:
+      tags: [Recomendações]
+      operationId: aiRecommendations
+      summary: Gera recomendações de livros para o usuário
+      description: |
+        Não exige payload: constrói o snapshot do usuário autenticado, gera um
+        embedding com `text-embedding-3-small` e consulta até cinco livros com
+        limiar de similaridade 0.72. Se o snapshot for vazio, retorna `books: []`.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Lista de livros recomendados, possivelmente vazia.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [books]
+                properties:
+                  books:
+                    type: array
+                    description: Registros retornados por `match_books`.
+                    items: {}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '503':
+          description: Chave/provider de embedding, snapshot ou consulta indisponível.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                recomendacoes:
+                  value: {error: recommendations_unavailable}
+                embedding:
+                  value: {error: embedding_unavailable}
+                temporario:
+                  value: {error: temporarily_unavailable}
+
+  /ai-user-embeddings:
+    post:
+      tags: [Recomendações]
+      operationId: aiUserEmbeddings
+      summary: Gera e persiste o embedding de leitura do usuário
+      description: |
+        O corpo é JSON e pode ser `{}`. Se contiver `user_id`, ele deve ser a
+        UUID do usuário autenticado. Um embedding existente atualizado há menos
+        de uma hora é limitado e exige retry após 3600 segundos. O embedding é
+        gerado com `text-embedding-3-small` e persistido com hash SHA-256 do
+        snapshot.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiUserEmbeddingsRequest'
+      responses:
+        '200':
+          description: Embedding persistido.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, dims]
+                properties:
+                  ok: {type: boolean, const: true}
+                  dims:
+                    type: integer
+                    minimum: 1
+                    description: Número de dimensões do vetor gerado.
+        '400':
+          description: O corpo não pôde ser interpretado como JSON.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: invalid_json}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: "`user_id` informado não é a identidade do Bearer."
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: forbidden}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '429':
+          description: Embedding atualizado recentemente; aguardar 3600 segundos.
+          headers:
+            Retry-After:
+              description: Segundos até a próxima geração permitida.
+              schema: {type: integer, const: 3600}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitedError'
+              example: {error: rate_limited, retry_after_seconds: 3600}
+        '503':
+          description: Embedding, snapshot, persistência ou configuração indisponível.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                configuracao:
+                  value: {error: embeddings_unavailable}
+                vazio:
+                  value: {error: embedding_unavailable}
+                temporario:
+                  value: {error: temporarily_unavailable}
+
+  /match-readers:
+    post:
+      tags: [Leitores]
+      operationId: matchReaders
+      summary: Encontra leitores com perfil de leitura semelhante
+      description: |
+        Usa o embedding já persistido do usuário. `threshold` padrão é 0.75 e
+        deve estar entre 0.55 e 0.95. `limit` padrão é 20, deve resultar entre
+        1 e 20 e, quando decimal, é truncado com `Math.floor`. Se o usuário
+        ainda não tiver embedding, retorna `ok: false` com `reason: no_embedding`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchReadersRequest'
+      responses:
+        '200':
+          description: Correspondências, lista vazia, ou ausência de embedding.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/MatchReadersResponse'
+                  - $ref: '#/components/schemas/NoEmbeddingResponse'
+        '400':
+          description: JSON inválido ou parâmetros fora dos limites.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                json:
+                  value: {error: invalid_json}
+                parametros:
+                  value: {error: invalid_parameters}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: "`user_id` informado não é a identidade do Bearer."
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: forbidden}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '503':
+          description: Falha temporária ao carregar embedding, calcular overlap ou persistir cache.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: temporarily_unavailable}
+
+  /newsletter-dispatch:
+    post:
+      tags: [Newsletter]
+      operationId: newsletterDispatch
+      summary: Despacha uma newsletter para todos os confirmados
+      description: |
+        Exige Bearer de um usuário cujo perfil tenha `role=admin`. O corpo
+        aceita somente o `issue_id`; a issue deve existir e ainda não ter
+        `sent_at`. Para compatibilidade, `frequency`, `tags_any`, `tags_all` e
+        `tags` do `audience_filter` são validados (frequência entre daily,
+        weekly, monthly e special_only; listas com no máximo 50 tags de até 80
+        caracteres), mas são ignorados na seleção: a audiência é sempre
+        `todos_confirmados`, isto é, assinantes `confirmed` sem
+        `unsubscribed_at`. O despacho é idempotente por issue e destinatário.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewsletterDispatchRequest'
+      responses:
+        '200':
+          description: Despacho concluído, com contagens de sucesso e falha.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewsletterDispatchResponse'
+        '400':
+          description: JSON inválido ou issue_id ausente/inválido.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                json:
+                  value: {error: invalid_json}
+                payload:
+                  value: {error: invalid_payload}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: Usuário autenticado não é administrador.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: forbidden}
+        '404':
+          description: Issue de newsletter não encontrada.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: issue_not_found}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '409':
+          description: Issue já enviada ou despacho já reivindicado por outra execução.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                enviada:
+                  value: {error: already_dispatched}
+                reivindicada:
+                  value: {error: dispatch_already_claimed}
+        '422':
+          description: Filtro de audiência inválido ou contém chave não suportada.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                invalido:
+                  value: {error: invalid_audience_filter}
+                chave:
+                  value: {error: unsupported_audience_filter}
+        '503':
+          description: Provider de e-mail, banco ou execução temporariamente indisponível.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                provider:
+                  value: {error: newsletter_provider_unavailable}
+                temporario:
+                  value: {error: temporarily_unavailable}
+
+  /stripe-webhook:
+    post:
+      tags: [Pagamentos]
+      operationId: stripeWebhook
+      summary: Recebe e aplica um evento assinado do Stripe
+      description: |
+        Deve receber o corpo bruto do evento Stripe e o header
+        `stripe-signature`. A assinatura é verificada com
+        `STRIPE_WEBHOOK_SECRET`; não há Bearer. Eventos de checkout podem
+        vincular o customer ao usuário Supabase, e eventos de subscription
+        atualizam o plano/status por RPC. Falhas de processamento retornam 5xx
+        para que o Stripe faça retry.
+      security:
+        - StripeSignature: []
+      parameters:
+        - $ref: '#/components/parameters/StripeSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+            description: Corpo JSON bruto do evento; a assinatura cobre o corpo recebido.
+          text/plain:
+            schema: {type: string}
+            description: Representação textual aceita para preservar o corpo bruto.
+      responses:
+        '200':
+          description: Evento aceito e aplicado.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: ok
+        '400':
+          description: Assinatura Stripe ausente, inválida ou não correspondente ao corpo.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: invalid signature
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: method not allowed
+        '500':
+          description: Evento assinado não pôde ser processado; o Stripe deve repetir.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: event processing failed
+        '503':
+          description: Webhook não configurado com segredo ou chave Stripe obrigatórios.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: webhook not configured
+
+  /social-render-card:
+    post:
+      tags: [Social]
+      operationId: socialRenderCard
+      summary: Renderiza um cartão social SVG
+      description: |
+        Cria um job e renderiza um SVG 1200x630. O usuário do payload, quando
+        informado, deve ser o mesmo do Bearer. `title` é limitado a 100
+        caracteres e `quote` (ou, como fallback, `text`) a 500 caracteres no
+        render; se ausentes são usados textos padrão. Há limite de 10 jobs por
+        usuário em qualquer janela de 24 horas.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialRenderCardRequest'
+      responses:
+        '200':
+          description: Job renderizado e URL pública do cartão disponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialRenderCardResponse'
+        '400':
+          description: JSON ou payload inválido.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                json:
+                  value: {error: invalid_json}
+                payload:
+                  value: {error: invalid_payload}
+        '401':
+          description: Bearer ausente, inválido ou usuário não encontrado.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: unauthorized}
+        '403':
+          description: "`user_id` informado não é a identidade do Bearer."
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: forbidden}
+        '405':
+          description: Método HTTP diferente de POST.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: method_not_allowed}
+        '429':
+          description: Limite diário de 10 renderizações atingido.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {error: daily_limit_reached}
+        '503':
+          description: Falha temporária ao criar, renderizar, enviar ou atualizar o job.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              examples:
+                criacao:
+                  value: {error: could_not_create_job}
+                render:
+                  value: {error: render_failed}
+                estado:
+                  value: {error: render_state_update_failed}
+                temporario:
+                  value: {error: temporarily_unavailable}
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token Bearer validado por `auth.getUser`; identifica um usuário Supabase válido.
+    ScheduledRemindersSecret:
+      type: apiKey
+      in: header
+      name: x-scheduled-reminders-secret
+      description: Segredo constante em `SCHEDULED_REMINDERS_SECRET`.
+    StripeSignature:
+      type: apiKey
+      in: header
+      name: stripe-signature
+      description: Assinatura do corpo bruto, validada com `STRIPE_WEBHOOK_SECRET`.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: UUID usada para idempotência; se presente, prevalece sobre `request_id`.
+      schema:
+        $ref: '#/components/schemas/UUID'
+    ScheduledRemindersSecret:
+      name: x-scheduled-reminders-secret
+      in: header
+      required: true
+      description: Segredo exigido pelo handler de lembretes.
+      schema: {type: string, minLength: 1}
+    StripeSignature:
+      name: stripe-signature
+      in: header
+      required: true
+      description: Header produzido pelo Stripe para verificação do corpo bruto.
+      schema: {type: string, minLength: 1}
+  schemas:
+    UUID:
+      type: string
+      format: uuid
+      description: UUID válida conforme o formato exigido pelo handler.
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Código estável do erro devolvido pelo handler.
+        attempt_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: true
+    RateLimitedError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          required: [retry_after_seconds]
+          properties:
+            retry_after_seconds:
+              type: integer
+              minimum: 1
+              description: Número de segundos sugerido antes do retry.
+    QuizAnswer:
+      type: object
+      required: [question_id, chosen_idx]
+      properties:
+        question_id:
+          $ref: '#/components/schemas/UUID'
+        chosen_idx:
+          type: integer
+          description: Índice zero-based escolhido; índices fora das opções resultam em 422.
+      additionalProperties: true
+    QuizValidateRequest:
+      type: object
+      required: [chapter_id, answers]
+      properties:
+        user_id:
+          $ref: '#/components/schemas/UUID'
+        chapter_id:
+          $ref: '#/components/schemas/UUID'
+        request_id:
+          $ref: '#/components/schemas/UUID'
+        answers:
+          type: array
+          minItems: 1
+          maxItems: 50
+          description: Respostas sem question_id duplicado; deve cobrir exatamente o quiz.
+          items:
+            $ref: '#/components/schemas/QuizAnswer'
+      additionalProperties: true
+    QuizAnswerDetail:
+      type: object
+      required: [question_id, chosen_idx, is_correct]
+      properties:
+        question_id:
+          $ref: '#/components/schemas/UUID'
+        chosen_idx: {type: integer}
+        is_correct: {type: boolean}
+      additionalProperties: false
+    QuizValidateResponse:
+      type: object
+      required: [attempt_id, score, total, detail, duplicate]
+      properties:
+        attempt_id:
+          $ref: '#/components/schemas/UUID'
+        score:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 1
+          maximum: 50
+        detail:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuizAnswerDetail'
+        duplicate:
+          type: boolean
+      additionalProperties: false
+    AwardXpRequest:
+      oneOf:
+        - type: object
+          required: [source]
+          properties:
+            source:
+              type: string
+              const: streak_bonus
+            ref_id:
+              description: Referência opcional aceita por compatibilidade e ignorada pelo handler.
+          additionalProperties: true
+        - type: object
+          required: [source, ref_id]
+          properties:
+            source:
+              type: string
+              enum: [join_meeting, finish_chapter, comment, quiz_answer, finish_book]
+            ref_id:
+              $ref: '#/components/schemas/UUID'
+          additionalProperties: true
+    AwardXpResponse:
+      type: object
+      required: [ok, amount]
+      properties:
+        ok: {type: boolean, const: true}
+        amount:
+          type: integer
+          enum: [10, 20, 25, 30, 50, 100]
+        duplicate:
+          type: boolean
+          description: Presente no bônus diário quando a chave já havia sido aplicada.
+      additionalProperties: false
+    VoteNextBookRequest:
+      type: object
+      required: [poll_id, option_id]
+      properties:
+        poll_id:
+          $ref: '#/components/schemas/UUID'
+        option_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: true
+    ScheduledRemindersResponse:
+      type: object
+      required: [ok, created, skipped, meetings]
+      properties:
+        ok: {type: boolean, const: true}
+        created: {type: integer, minimum: 0}
+        skipped: {type: integer, minimum: 0}
+        meetings:
+          type: integer
+          minimum: 0
+          description: Número de reuniões scheduled na janela de 48 horas.
+      additionalProperties: false
+    AiUserEmbeddingsRequest:
+      type: object
+      properties:
+        user_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: true
+      description: JSON objeto; `user_id`, quando presente, deve coincidir com o Bearer.
+    MatchReadersRequest:
+      type: object
+      properties:
+        user_id:
+          $ref: '#/components/schemas/UUID'
+        threshold:
+          type: number
+          minimum: 0.55
+          maximum: 0.95
+          default: 0.75
+          description: Limiar de similaridade; o padrão é 0.75.
+        limit:
+          type: number
+          minimum: 1
+          maximum: 20
+          default: 20
+          description: Quantidade máxima; o handler aplica Math.floor antes de validar.
+      additionalProperties: true
+    ReaderMatch:
+      type: object
+      required: [user_id, username, display_name, avatar_url, similarity, shared_books, shared_moods]
+      properties:
+        user_id:
+          $ref: '#/components/schemas/UUID'
+        username: {type: string}
+        display_name: {type: [string, 'null']}
+        avatar_url: {type: [string, 'null'], format: uri}
+        similarity: {type: number}
+        shared_books: {type: integer, minimum: 0}
+        shared_moods:
+          type: array
+          items: {type: string}
+      additionalProperties: true
+    MatchReadersResponse:
+      type: object
+      required: [ok, matches]
+      properties:
+        ok: {type: boolean, const: true}
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReaderMatch'
+      additionalProperties: false
+    NoEmbeddingResponse:
+      type: object
+      required: [ok, reason]
+      properties:
+        ok: {type: boolean, const: false}
+        reason: {type: string, const: no_embedding}
+      additionalProperties: false
+    NewsletterDispatchRequest:
+      type: object
+      required: [issue_id]
+      properties:
+        issue_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: true
+    NewsletterDispatchResponse:
+      type: object
+      required: [ok, sent, failed, total]
+      properties:
+        ok: {type: boolean}
+        sent: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        total: {type: integer, minimum: 0}
+      additionalProperties: false
+    SocialRenderCardRequest:
+      type: object
+      required: [kind, payload]
+      properties:
+        user_id:
+          $ref: '#/components/schemas/UUID'
+        kind:
+          type: string
+          enum: [quote_card, progress_card, milestone_card, review_card, list_card, aura_card, streak_card]
+        payload:
+          type: object
+          description: Dados do cartão; title, quote e text são opcionais.
+          properties:
+            title:
+              type: string
+              description: Título usado até os primeiros 100 caracteres no SVG.
+            quote:
+              type: string
+              description: Citação usada até os primeiros 500 caracteres.
+            text:
+              type: string
+              description: Fallback de texto usado até os primeiros 500 caracteres quando quote não existe.
+          additionalProperties: true
+      additionalProperties: true
+    SocialRenderJob:
+      type: object
+      required: [id, user_id, kind, payload, status, image_url, error, created_at, rendered_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        user_id:
+          $ref: '#/components/schemas/UUID'
+        kind:
+          type: string
+          enum: [quote_card, progress_card, milestone_card, review_card, list_card, aura_card, streak_card]
+        payload: {type: object, additionalProperties: true}
+        status: {type: string, const: rendered}
+        image_url: {type: [string, 'null'], format: uri}
+        error: {type: [string, 'null']}
+        created_at: {type: string, format: date-time}
+        rendered_at: {type: [string, 'null'], format: date-time}
+      additionalProperties: true
+    SocialRenderCardResponse:
+      type: object
+      required: [ok, job, job_id, image_url]
+      properties:
+        ok: {type: boolean, const: true}
+        job:
+          $ref: '#/components/schemas/SocialRenderJob'
+        job_id:
+          $ref: '#/components/schemas/UUID'
+        image_url:
+          type: string
+          format: uri
+      additionalProperties: false

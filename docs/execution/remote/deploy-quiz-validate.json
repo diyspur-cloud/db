@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514769104,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_50d059ee-824e-476d-a0a0-cbeb3c25bb00_1/source/quiz-validate/index.ts",
+  "ezbr_sha256": "8d02c9fb877af633ad8cbf77d860faf5c963d46f067031181d6b52fab1c13ed8",
+  "id": "50d059ee-824e-476d-a0a0-cbeb3c25bb00",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_50d059ee-824e-476d-a0a0-cbeb3c25bb00_1/source/deno.json",
+  "name": "quiz-validate",
+  "slug": "quiz-validate",
+  "status": "ACTIVE",
+  "updated_at": 1791514769104,
+  "verify_jwt": true,
+  "version": 1
+}

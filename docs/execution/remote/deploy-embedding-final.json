@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514841259,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_affaf0f8-a323-4659-bac3-dbbafc4eb607_6/source/ai-user-embeddings/index.ts",
+  "ezbr_sha256": "348bd2cd747dd5e685390e86760bdd82d4c9788364f31139c0dc8c2e7ff8cf21",
+  "id": "affaf0f8-a323-4659-bac3-dbbafc4eb607",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_affaf0f8-a323-4659-bac3-dbbafc4eb607_6/source/deno.json",
+  "name": "ai-user-embeddings",
+  "slug": "ai-user-embeddings",
+  "status": "ACTIVE",
+  "updated_at": 1791517873719,
+  "verify_jwt": true,
+  "version": 6
+}

@@ -1,0 +1,14 @@
+{
+  "created_at": 1791514880540,
+  "entrypoint_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_ba5036b7-3a0d-4ce9-b5f8-810753caca9c_1/source/social-render-card/index.ts",
+  "ezbr_sha256": "13e3dc396fd06c15e263e7dc4074c88e1f574f464ffcd6232f9ec303b3c8447f",
+  "id": "ba5036b7-3a0d-4ce9-b5f8-810753caca9c",
+  "import_map": true,
+  "import_map_path": "file:///tmp/user_fn_xjhehhfhhoomblcggjpk_ba5036b7-3a0d-4ce9-b5f8-810753caca9c_1/source/deno.json",
+  "name": "social-render-card",
+  "slug": "social-render-card",
+  "status": "ACTIVE",
+  "updated_at": 1791514880540,
+  "verify_jwt": true,
+  "version": 1
+}
