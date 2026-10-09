@@ -2,7 +2,7 @@
 
 **Data:** 9 out. 2026 (UTC−03)
 **Repositórios:** [app](https://github.com/diyspur-cloud/app) · [db](https://github.com/diyspur-cloud/db)
-**Branches locais de trabalho:** `feat/sdd-melhorias-20261009` em ambos
+**Branches publicadas:** [app](https://github.com/diyspur-cloud/app/tree/feat/sdd-melhorias-20261009) (`d1f32fd`) · [db](https://github.com/diyspur-cloud/db/tree/feat/sdd-melhorias-20261009) (`fe9790c`)
 **Preview temporário, somente leitura:** https://3311-ikdnhnwfvud69qx7ypx0a-1308eb0c.us1.manus.computer
 **Fontes do escopo:** `sdd_melhorias.md`, `sdd_front.md`, `db/docs/implementation-plan.md`, `db/docs/implementation-blockers.md`.
 
@@ -54,7 +54,7 @@ Uma primeira chamada de diagnóstico selecionou colunas incorretas para três re
 2. **Migrations/Edge Functions remotas**: migration nova não foi aplicada; as versões de Edge Functions no Supabase continuam potencialmente diferentes do código local. A reconciliação de histórico e backup continuam obrigatórios antes de deploy.
 3. **Regras ainda dependentes do produto**: XP por evento/limites/timezone; critério de capítulo concluído e desbloqueio de spoiler; visibilidade/opt-out do ranking; publicação editorial; consentimento/retention de recomendações; regras e preços de assinatura.
 4. **Configuração externa**: providers OAuth, secrets de OpenAI/Resend/Stripe/reminders, IDs reais de preço/callbacks e endereços de teste não foram obtidos nem alterados.
-5. **Push/release**: mudanças estão em branches locais de feature e foram testadas; não foram mergeadas a `main`. Enviar os dois pushes depois do último double-check do usuário/branches e dos gates operacionais ainda abertos, em vez de dizer que a execução é produção-ready.
+5. **Push/release**: as duas branches de feature foram enviadas ao GitHub depois do double-check local; não foram mergeadas a `main` e não houve deploy remoto. Os pushes estão concluídos; qualquer merge/deploy aguarda o fechamento dos gates operacionais, e a execução não deve ser descrita como production-ready.
 
 ## Sequência para concluir os gates
 
