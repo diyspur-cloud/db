@@ -10,6 +10,8 @@
 >
 > **Escopo deste documento consolidado:** cobre **integralmente** o `SDDBD.md` original e o `SDDBD.md — Complemento (Módulos Ausentes)`. Nenhum item é resumido. Nenhum item é repetido. A numeração das migrations preserva a ordem de dependência do documento original e continua no complemento a partir de `20260101001650_*`.
 
+> **Estado de implementação (2026-10-09):** este arquivo nasceu como plano de implementação. O estado real do projeto remoto, das Edge Functions e dos testes está em [`README.md`](./README.md) e [`docs/deployment-status.md`](./docs/deployment-status.md); checkboxes nas fases originais continuam indicando trabalho de produto/front-end, não necessariamente ausência de schema. A extensão `book_reviews`, o contexto de leitura de `user_clubs`, curtidas do diário e regras de backend implementadas estão descritas abaixo e nas migrations versionadas. `user_progress.percent`/`status` é autodeclarado e informativo; uma view anti-spoiler não é uma fronteira de autorização para conteúdo não publicado.
+
 ---
 
 ## Índice
@@ -370,8 +372,8 @@ create table public.meeting_rsvps (
 ```sql
 create table public.user_progress (
   id            uuid primary key default gen_random_uuid(),
-  user_id       uuid not null references public.profiles(id) on delete cascade,
-  chapter_id    uuid not null references public.chapters(id) on delete cascade,
+  user_id       uuid not null references public.profiles (id) on delete cascade,
+  chapter_id    uuid not null references public.chapters (id) on delete cascade,
   status        shelf_status not null default 'want_to_read',
   percent       numeric(5,2) not null default 0.00 check (percent between 0 and 100),
   finished_at   timestamptz,
@@ -381,6 +383,12 @@ create table public.user_progress (
 );
 create index user_progress_user_idx on public.user_progress (user_id);
 ```
+
+#### Semântica de progresso e spoilers (decisão de produto)
+
+`user_progress.status` e `user_progress.percent` são **informações autodeclaradas pelo próprio leitor**, editáveis pelo titular; não existe no cliente uma telemetria confiável que prove leitura efetiva. `percent` serve a painéis pessoais e à preferência de ocultar spoilers da própria conta. Portanto, o bloqueio de spoiler baseado nesse percentual é uma conveniência de UX e **não** um controle de acesso a dados de terceiros, autorização administrativa, assinatura, pagamento ou outra decisão de segurança. A consulta continua restrita ao progresso do `auth.uid()` e às políticas de acesso do conteúdo.
+
+XP por capítulo/livro também é uma recompensa gamificada, não uma permissão ou benefício financeiro: o backend confere a existência do progresso/atividade do titular, fixa os valores de XP e grava a referência uma única vez, mas a conclusão de leitura é autodeclarada. Não usar `status`/`percent` como prova de leitura auditável. Se o produto exigir progresso verificável, será necessário instrumentar um leitor controlado pelo servidor e separar um evento/estado verificado que o cliente não possa escrever; isso não é inferível do esquema atual.
 
 **Arquivo:** `supabase/migrations/20260101000600_comments_and_reactions.sql`
 
@@ -619,6 +627,10 @@ create table public.user_clubs (
   slug         text unique not null,
   description  text,
   is_private   boolean not null default false,
+  current_book_id    uuid references public.books(id) on delete set null,
+  current_season_id  uuid references public.seasons(id) on delete set null,
+  current_started_at timestamptz,
+  current_ends_at    timestamptz,
   created_at   timestamptz not null default now()
 );
 
@@ -629,7 +641,24 @@ create table public.user_club_members (
   joined_at  timestamptz not null default now(),
   primary key (club_id, user_id)
 );
+
+-- Avaliações de livro (extensão aditiva implantada em 2026-10).
+create table public.book_reviews (
+  id uuid primary key default gen_random_uuid(),
+  book_id uuid not null references public.books(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  rating numeric(3,2) check (rating is null or rating between 0 and 5),
+  spice_level integer check (spice_level is null or spice_level between 0 and 5),
+  review_text text check (review_text is null or length(review_text) <= 20000),
+  contains_spoilers boolean not null default false,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint book_reviews_one_per_user_book unique (book_id, user_id)
+);
 ```
+
+`book_reviews` usa RLS: o público lê apenas conteúdo ativo; o titular/admin pode consultar seu próprio conteúdo removido; escrita é limitada ao titular ou admin. A view comunitária expõe agregados, não PII. Consulte `20261008214832_add_book_reviews.sql` e as migrations posteriores de hardening para grants/policies efetivamente ativos.
 
 ### 4.6 Extensions e Enums complementares
 
@@ -839,6 +868,14 @@ create table public.reading_journal_attachments (
   mime_type     text not null,
   size_bytes    bigint not null,
   created_at    timestamptz not null default now()
+);
+
+-- Uma curtida por leitor/entrada; likes_count é mantido pelo trigger no banco.
+create table public.reading_journal_likes (
+  entry_id   uuid not null references public.reading_journal_entries(id) on delete cascade,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default statement_timestamp(),
+  primary key (entry_id, user_id)
 );
 
 -- =====================================================================
@@ -2055,6 +2092,8 @@ where ux.season_id is not null;
 ```
 
 #### 6.2.3 View: comentários com lock anti-spoiler
+
+Este lock usa `user_progress.percent` autodeclarado do próprio leitor. É um recurso de autocontrole de spoilers, não prova de leitura nem boundary de autorização; a view é invoker e as policies continuam sendo a proteção de acesso entre usuários.
 
 ```sql
 create or replace view public.v_comments_visible as
@@ -3972,7 +4011,7 @@ supabase.channel(`comments:chapter:${chapterId}`)
 ### Fase 6 — Diário e listas (semana 8)
 - [ ] Aplicar `20260101001800_journal_and_lists.sql`
 - [ ] Bucket `journal-media` + políticas
-- [ ] Habilitar `reading_journal_entries` no Realtime
+- [x] Habilitar `reading_journal_entries` no Realtime (tabela consta na publicação remota; teste end-to-end de Auth ainda depende de ambiente isolado)
 - [ ] UI de diário (entrada por dia, mídia, mood)
 - [ ] UI de listas (criar, colaborar, compartilhar)
 - [ ] UI de "Up Next" (máx. 5 livros)
@@ -4040,19 +4079,19 @@ supabase.channel(`comments:chapter:${chapterId}`)
 |---|---|
 | **Migrations** | 29 arquivos SQL cobrindo P0 → P3, RLS, triggers, views, Realtime, Storage |
 | **Metadados ricos** | `content_warnings`, `book_content_warnings`, `book_mood_votes`, `book_mood_stats`, `mood_labels`, `editorial_picks` |
-| **Leitura pessoal** | `reading_journal_entries`, `reading_journal_attachments`, `reading_lists`, `reading_list_items`, `reading_list_collaborators`, `user_up_next`, `buddy_reads` |
+| **Leitura pessoal** | `reading_journal_entries`, `reading_journal_attachments`, `reading_journal_likes`, `reading_lists`, `reading_list_items`, `reading_list_collaborators`, `user_up_next`, `buddy_reads` |
 | **Gamificação e stats** | `xp_events`, `user_xp`, `user_streaks`, `milestones`, `user_milestone_progress`, `user_quiz_averages`, `chapter_quiz_averages`, `reading_goals`, `reading_goal_progress`, `challenge_prompts` |
 | **Comunidade e social** | `comments`, `reactions`, `host_prompts`, `video_timed_comments`, `feed_posts`, `feed_post_media`, `feed_post_likes`, `feed_post_comments`, `follows`, `user_reading_preferences`, `user_reading_embeddings`, `user_match_cache` |
 | **Monetização e newsletter** | `membership_plans`, `user_subscriptions`, `payment_events`, `user_membership_perks`, `newsletter_subscribers`, `newsletter_issues`, `newsletter_deliveries`, `affiliate_clicks` |
 | **Conteúdo extra e jogos** | `chapter_extra_content`, `chapter_activities`, `chapter_activity_attempts`, `chapter_prompts`, `chapter_prompt_responses`, `social_render_jobs` |
 | **Agregações** | `v_chapter_audience`, `v_season_ranking`, `v_comments_visible`, `v_host_prompt_results`, `v_video_timed_comment_stats`, `mv_book_community_stats`, `v_user_reading_overview`, `v_club_progress_panel`, `v_feed_post_counters` |
 | **RPCs** | `match_books`, `match_readers`, `build_user_reading_snapshot`, `refresh_book_mood_stats`, `generate_milestones_for_season`, `refresh_reading_goal_progress`, `refresh_user_quiz_averages`, `refresh_chapter_quiz_averages`, `refresh_content_warning_votes`, `get_reader_matches` |
-| **Edge Functions** | `quiz-validate`, `award-xp`, `vote-next-book`, `scheduled-reminders`, `ai-recommendations`, `ai-user-embeddings`, `match-readers`, `newsletter-dispatch`, `stripe-webhook`, `social-render-card` |
+| **Edge Functions** | `quiz-validate`, `award-xp`, `vote-next-book`, `scheduled-reminders`, `ai-recommendations`, `ai-user-embeddings`, `match-readers`, `newsletter-dispatch`, `stripe-webhook`, `social-render-card`, `generate-book-embeddings` |
 | **Buckets** | `avatars`, `book-covers`, `manuscripts`, `meeting-slides`, `journal-media`, `chapter-extras`, `feed-media`, `newsletter-assets`, `social-cards`, `ebooks` |
 | **Anti-spoiler** | View `v_comments_visible` + coluna `min_percent` + validação por `user_progress.percent` |
 | **Gamificação** | Ledger `xp_events` + saldo `user_xp` + `user_streaks` + `achievements` |
 | **Integrações** | Webhooks (Resend, Discord, Google Calendar, Stripe), cron via `pg_cron`/`pg_net` |
-| **Tipagem** | `database.types.ts` gerado + `domain.ts` + `domain.complement.ts` |
+| **Tipagem** | `src/lib/supabase/database.types.ts` gerado a partir do schema remoto em 2026-10-09 + `domain.ts` + `domain.complement.ts` |
 | **Cliente** | `client.ts`, `server.ts`, `middleware.ts` (Next.js 15 + @supabase/ssr) |
 | **Seed** | `seed.sql` (MVP Dom Casmurro) + `seed_complement.sql` (moods, CWs, editorial, milestones, extras, atividades, prompts, planos, conquistas, newsletter) |
 | **Roadmap** | Fases 1 a 11 com checklist por arquivo |

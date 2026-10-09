@@ -1,0 +1,17 @@
+{
+  "lock": "./deno.lock",
+  "tasks": {
+    "check": "deno check award-xp/index.ts vote-next-book/index.ts scheduled-reminders/index.ts ai-recommendations/index.ts ai-user-embeddings/index.ts match-readers/index.ts newsletter-dispatch/index.ts stripe-webhook/index.ts social-render-card/index.ts quiz-validate/index.ts generate-book-embeddings/index.ts",
+    "lint": "deno lint _shared/auth.ts _shared/cors.ts award-xp/index.ts vote-next-book/index.ts scheduled-reminders/index.ts ai-recommendations/index.ts ai-user-embeddings/index.ts match-readers/index.ts newsletter-dispatch/index.ts stripe-webhook/index.ts social-render-card/index.ts quiz-validate/index.ts generate-book-embeddings/index.ts",
+    "fmt:check": "deno fmt --check _shared/auth.ts _shared/cors.ts award-xp/index.ts vote-next-book/index.ts scheduled-reminders/index.ts ai-recommendations/index.ts ai-user-embeddings/index.ts match-readers/index.ts newsletter-dispatch/index.ts stripe-webhook/index.ts social-render-card/index.ts quiz-validate/index.ts generate-book-embeddings/index.ts"
+  },
+  "compilerOptions": {
+    "strict": true
+  },
+  "imports": {
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.117.2",
+    "openai": "npm:openai@7.30.0",
+    "resend": "npm:resend@6.32.1",
+    "stripe": "npm:stripe@23.0.0"
+  }
+}

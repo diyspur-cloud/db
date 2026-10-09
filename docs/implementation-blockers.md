@@ -1,45 +1,57 @@
-# Bloqueios históricos, decisões e pendências
+# Bloqueios, decisões e pendências atuais
 
-A auditoria anterior encontrou referências a relações/colunas ausentes no SDD e guardou SQL derivado em `supabase/migrations/blocked/`. Em 8 de outubro de 2026, parte do escopo foi implementada com migrations aditivas revisáveis. Este documento substitui a interpretação antiga de que todos os itens abaixo permanecem bloqueados.
+**Atualizado:** 2026-10-09. Este documento supersede a interpretação histórica de que todos os itens do anexo permanecem bloqueados; veja [`deployment-status.md`](./deployment-status.md) para a evidência remota e os testes realmente executados.
 
-## Resolvido no banco
+## Estado resumido
 
-| Item | Estado atual | Migration/decisão |
+- **Resolvido no Supabase:** migration `20261009020600` aplicada e confirmada no histórico/catálogo; tabelas, RPCs, view e triggers novos foram inspecionados.
+- **Resolvido no repositório:** tipos TypeScript gerados do schema pós-migration; fonte de 11 Edge Functions corrigida; smoke PGlite ampliado; workflows CI/deploy manual criados; SDD e README atualizados.
+- **Não resolvido e não declarar sucesso:** deploy das Edge Functions, secrets de provedores, testes mutantes com Auth/Storage/Realtime real, proteção de reviewers no ambiente GitHub e reconciliação das migrations baseline.
+- **Restrição decidida:** o usuário recusou criar um branch Supabase após ser informado do custo recorrente cotado de **US$ 0,01344 por hora**. Nenhum branch foi criado. O único projeto conectado é o alvo de produção; teste mutante foi omitido para preservar dados.
+
+## Itens resolvidos no schema
+
+| Item | Estado atual | Referência |
 |---|---|---|
-| `book_reviews` ausente | Criada em `public.book_reviews`, com rating, nível de conteúdo, texto, spoiler, timestamps, soft-delete, constraints, RLS e policies. | `20261008214832_add_book_reviews.sql` |
-| Snapshot pessoal dependia de reviews | `public.build_user_reading_snapshot(uuid)` agora existe como função `SECURITY INVOKER`; um JWT autenticado só pode solicitar seu próprio snapshot; `anon` não tem `EXECUTE`. | `20261008214920_add_community_reading_views.sql` e hardening posterior |
-| Estatísticas agregadas por livro | MV criado e movido para `private`; o contrato REST é `public.v_book_community_stats`. | `20261008214920_add_community_reading_views.sql` + `20261008215324_harden_community_data_access.sql` |
-| Contexto de leitura de clubes | Quatro campos opcionais adicionados a `public.user_clubs`; linhas já existentes permanecem válidas. | `20261008214847_add_user_club_reading_context.sql` |
-| Painel de clube | A view `v_club_progress_panel` consulta `user_clubs`, `user_club_members`, progresso, livros e temporadas existentes. | `20261008214920_add_community_reading_views.sql` |
-| Três tabelas RLS sem policies | Rules explícitas de titular/admin implementadas para RSVP, votos e progresso de desafios. | `20261008214859_restore_missing_rls_policies.sql` + consolidação posterior |
-| PII e respostas de perfil | `v_profiles_public` projeta somente dados públicos; RPCs próprias retornam apenas o perfil autenticado. Helpers privilegiados ficam em `private`; RPCs públicas são `SECURITY INVOKER`. | `20261008225152_harden_core_authorization.sql` + `20261008225856_encapsulate_profile_consent_privilege.sql` |
-| Spoilers e quiz | Conteúdo de comentário/feed é mascarado até o progresso; a view de quiz omite gabarito/explicação e tentativas ficam gravadas pelo servidor. | `20261008225152_harden_core_authorization.sql`; `quiz-validate` ainda requer deploy aprovado |
-| Elevação de perfil/clube | Cliente não atualiza `profiles.role`/`level`, nem atribui papel privilegiado a si próprio; somente owner gerencia papéis válidos do clube. | `20261008225535_prevent_client_privilege_escalation.sql` |
-| Timestamps de consentimento | Cliente muda apenas `lgpd_consent`; trigger define/limpa `lgpd_consent_at` e `updated_at`, e setter opera sob RLS sem elevação. | `20261008225856_encapsulate_profile_consent_privilege.sql` |
-| Policies amplas de diário e prompts | Policies `FOR ALL` substituídas por regras separadas de insert/update/delete, sem sobrepor SELECTs de visibilidade. | `20261008225535_prevent_client_privilege_escalation.sql` |
+| Reviews ausentes | `public.book_reviews` existe com rating/spice, texto, spoiler, soft delete, unicidade, índices, grants e RLS. | `20261008214832_add_book_reviews.sql` + hardening posterior |
+| Snapshot dependente de review | RPC restrita ao titular/autorização; helpers privados fora da Data API. | migrations `20261008214920…` e `20261008215324…` |
+| Contexto de leitura em clubes | Quatro campos opcionais de livro/temporada/data em `public.user_clubs`; FKs com `ON DELETE SET NULL`. | `20261008214847_add_user_club_reading_context.sql` |
+| Painel de clubes | View baseada em `user_clubs`/membros; nenhuma entidade `public.clubs` foi inventada. | `20261008214920_add_community_reading_views.sql` |
+| RSVP, voto e progresso challenge sem policies | Policies de owner/admin aplicadas; leituras diretas anônimas bloqueadas onde apropriado. | migrations `20261008214859…` e consolidação |
+| PII e consentimento | Perfil público projetado; privados via RPC do titular; timestamp mantido por trigger; grants de role/level restritos. | `20261008225152…`, `20261008225535…`, `20261008225856…` |
+| Feed/quiz/spoiler | Views seguras; progresso autodeclarado explicitado como informação, não autorização de conteúdo realmente privado; validação de quiz no servidor. | hardening + migration `20261009020600` |
+| XP e quizzes | Idempotência de XP/tentativas, média recalculada após mutações, rate-limit transacional e execução privilegiada restrita. | migration `20261009020600` |
+| Metas e fim de leitura | Metas recalculadas por livro completo e `finished_at` carimbado pelo banco. | migration `20261009020600` |
+| Likes do diário | `reading_journal_likes` criada; RLS titular; contador só por trigger. | migration `20261009020600` |
+| Poll counters | Janela/opção validada e contadores atômicos; contagem preexistente reconciliada. | migration `20261009020600` |
+| Reminder/newsletter/Stripe | Idempotência/lease e RPCs transacionais; handler newsletter exige Admin; Stripe valida assinatura. | migration `20261009020600` + fontes Edge |
+| Tipos do schema | `src/lib/supabase/database.types.ts` gerado após aplicação. | snapshot remoto 2026-10-09 |
 
-## Decisão de modelo: `public.clubs` versus `public.user_clubs`
+## Pendências e gates restantes
 
-O documento/trecho histórico usa `public.clubs.current_book_id`, mas o esquema implementado contém `public.user_clubs` e `user_club_members`, sem uma relação separada `public.clubs`. Para não inventar uma segunda entidade nem duplicar estado, as novas colunas e a view usam `user_clubs`.
+1. **Staging/Auth/Storage/Realtime:** executar `scripts/integration-smoke/test.ts` em branch/projeto descartável, com pelo menos dois usuários reais; cobrir leitor/admin e limpeza dos recursos. O harness está typechecked/linted/formatado e recusa explicitamente o ref de produção.
+2. **Secrets e funções:** fornecer/configurar segredos de runtime por stores apropriados. Nomes exigidos no gate de deploy: `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` e `SCHEDULED_REMINDERS_SECRET`. Esta sessão não obteve seus valores nem listou/substituiu valores já salvos.
+3. **Deploy:** inventário remoto continha zero Edge Functions. O workflow manual faz validação, compara o ref digitado e confere presença dos nomes dos secrets, mas ainda precisa de GitHub `SUPABASE_ACCESS_TOKEN`, variável `SUPABASE_PROJECT_REF` e proteção do ambiente `production` com reviewers. Nenhum deploy ocorreu.
+4. **Clientes externos de `award_xp`:** localizar aplicações/serviços fora deste repositório que dependam de execução direta; redirecionar para handler servidor autenticado. Não restaurar grant a `anon`/`authenticated` sem novo desenho.
+5. **Baseline CLI:** 24 entradas remotas `sdd_*` não mapeiam diretamente para migrations granulares locais `20260101…`. Projetar/revisar reconciliação num banco descartável antes de usar `supabase db push`. A migration mais nova tem ref `20261009020600`, mas isso não corrige o baseline histórico.
+6. **Extensões:** os advisors mantêm 5 extensions em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Mudar o schema delas exige staging com teste de tipos, operadores, índices e search path.
+7. **Performance:** medir tráfego antes de investigar 113 índices `unused_index` e 165 findings de policies permissivas; não remover índices de FK nem refatorar o modelo por contadores do advisor isoladamente.
+8. **Backup:** nenhum restore point manual foi criado para a rodada. Criar e validar ponto de restauração antes de futuras mudanças estruturais.
+9. **Frontend:** repositório é de backend; integrar APIs/views/RPCs ao produto e confirmar compatibilidade do contrato é trabalho separado.
+10. **Cron:** refresh da MV tem job `pg_cron`; não criar cron HTTP de reminders até deploy e autenticação serviço-a-serviço estarem testados.
+11. **Seeds:** sementes de exemplo permanecem locais. O preflight encontrou 0 perfis e 0 admins antes da migration; não aplicar seed demonstrativo à produção.
 
-Se a regra de produto realmente exige duas classes distintas de clube, o responsável pelo SDD precisa aprovar e especificar separadamente `public.clubs`, suas chaves, ownership, visibilidade, policies e relação com membros. Não crie essa relação silenciosamente.
+## Decisão de domínio: `user_clubs` versus `clubs`
 
-## Pendências que continuam válidas
+O texto histórico referenciava `public.clubs.current_book_id`, mas o schema remoto implementado usa `public.user_clubs`/`user_club_members` e não contém relação `public.clubs` separada. As quatro colunas opcionais e a view usam `user_clubs` para evitar duplicidade de estado. Se o produto quiser dois tipos distintos de clube, aprovar uma especificação nova de chaves, ownership, visibilidade, políticas e relação com membros antes de criar tabela.
 
-1. **Atualizar o SDD** para incorporar a tabela `book_reviews`, os quatro campos de leitura atual e as policies acrescentadas, deixando claro que são uma extensão deliberada do contrato original.
-2. **Testar com identidades reais de teste** titular, follower, membro/owner de clube e admin em ambiente Supabase isolado. O smoke test PGlite agora simula anon/authenticated, claims de dois titulares e operações permitidas/negadas, mas não cria sessões Auth reais nem valida Storage/Realtime Data API.
-3. **Revisar consumidores de RPC.** `award_xp` passou a ser exclusivamente invocável por `service_role`; chamadas diretas pelo app devem ser substituídas por endpoints seguros. A Edge Function `quiz-validate` ajustada continua sem deploy; seu pre-check de rate limit precisa ser atômico sob concorrência e a autorização do capítulo/XP idempotente precisa ser testada.
-4. **Edge Functions:** revisar autenticação, autorização por ownership/admin, payloads, rate limits, consentimento e secrets antes do deploy. `ai-user-embeddings` precisa verificar que o solicitante pode calcular o snapshot de `user_id` recebido.
-5. **Extensões em `public`:** cinco permanecem nesse schema. Mover `vector`, `pg_trgm`, `citext`, `unaccent` e `btree_gin` requer testes de tipos/operadores/RPCs e revisão do search path.
-6. **Histórico CLI:** as migrations baseline `sdd_*` registradas remotamente não correspondem diretamente aos nomes granulares `20260101…` locais. Não usar `supabase db push` no projeto atual até reconciliação controlada.
-7. **Frontend e tipos:** o repositório do banco não contém aplicação Next.js executável nem `database.types.ts`; gerar e revisar os tipos apenas depois de configurar/reconciliar o ambiente.
+## Arquivos `supabase/migrations/blocked/`
 
-## Arquivos históricos em `blocked/`
+São trechos de referência histórica do SDD, não migrations executáveis. Não os aplique nem os inclua em bundles: alguns conservam nomes antigos, dependem de relações já criadas e duplicariam objetos.
 
-Os arquivos ali preservados são referências originais do SDD, não migrations executáveis. Os objetos substitutos foram aplicados em migrations numeradas na raiz de `supabase/migrations/`. Não execute os arquivos arquivados manualmente, porque repetiriam relações/functions já criadas e alguns trechos conservam nomes antigos.
+## Segurança operacional
 
-## Automação e seeds opcionais
-
-O refresh de `private.mv_book_community_stats` foi agendado por `pg_cron` no job `refresh-mv-book-community-stats` a cada seis horas; o registro ativo foi conferido. O job `scheduled-reminders` continua pendente: a Edge Function não foi implantada e não há autenticação serviço-a-serviço configurada, então agendá-lo agora só produziria chamadas falhas.
-
-Os seeds de avaliação e clube estão em `supabase/dev-seeds/` para testes locais. Não foram aplicados ao remoto, que não tinha perfis nem administradores. As cinco extensões ainda em `public` não foram movidas, porque não havia branch de desenvolvimento disponível para testar tipos, operadores e RPCs afetados.
+- Não use a publishable key como autorização de migração, service-role ou credencial de deploy.
+- Não armazene chaves/segredos em GitHub público, `.env` versionado, README ou saída de CI.
+- Não rode `db push`, `migration up`, `db reset` nem reaplique os bundles no projeto atual até reconciliação do baseline.
+- Prefira migration corretiva aditiva a rollback destrutivo de schema já aplicado.
