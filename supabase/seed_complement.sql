@@ -15,18 +15,8 @@ insert into public.content_warnings (code, label, description, category) values
   ('gaslighting','Gaslighting','Manipulação psicológica.','mental_health')
 ON CONFLICT (code) DO NOTHING;
 
--- CW do Dom Casmurro
-insert into public.book_content_warnings (book_id, warning_id, severity, is_community, community_votes, notes)
-select
-  '22222222-2222-2222-2222-222222222222',
-  cw.id,
-  'moderate',
-  false,
-  0,
-  'Presente no núcleo do romance.'
-from public.content_warnings cw
-where cw.code in ('adultery','gaslighting','sexism','classism')
-ON CONFLICT (book_id, warning_id) DO NOTHING;
+-- A classificação indicativa de Verity (18 anos) está na ficha do livro.
+-- Não são inseridos avisos granulares sem validação editorial específica.
 
 -- =====================================================================
 -- 2. Mood labels (pt-BR)
@@ -52,46 +42,37 @@ ON CONFLICT (mood) DO NOTHING;
 -- =====================================================================
 insert into public.editorial_picks (
   book_id, season_id, kind, reference_month, title, rationale, is_active
-) values (
-  '22222222-2222-2222-2222-222222222222',
-  '33333333-3333-3333-3333-333333333333',
-  'book_of_the_month',
-  date_trunc('month', current_date)::date,
-  'Dom Casmurro — a dúvida que nos constitui',
-  'Escolhemos reler Machado porque a pergunta sobre Capitu continua sendo, antes de tudo, uma pergunta sobre nós.',
-  true
-) ON CONFLICT (kind, reference_month) DO NOTHING;
+)
+select b.id, s.id, 'book_of_the_month', date_trunc('month', current_date)::date,
+       'Verity — o suspense por trás do manuscrito',
+       'Um suspense psicológico em que um manuscrito e uma casa cheia de perguntas convidam o clube a comparar versões.',
+       true
+  from public.books b
+  join public.seasons s on s.book_id = b.id
+ where b.slug = 'verity' and s.slug = 't1-verity'
+on conflict (kind, reference_month) do update set
+  book_id = excluded.book_id,
+  season_id = excluded.season_id,
+  title = excluded.title,
+  rationale = excluded.rationale,
+  is_active = excluded.is_active;
 
 -- =====================================================================
 -- 4. Mood stats baseline (vazio, será preenchido por votos)
 -- =====================================================================
-insert into public.book_mood_stats (book_id) values
-  ('22222222-2222-2222-2222-222222222222')
+insert into public.book_mood_stats (book_id)
+select id from public.books where slug = 'verity' limit 1
 on conflict (book_id) do nothing;
 
 -- =====================================================================
 -- 5. Milestones automáticos para a temporada 1
 -- =====================================================================
-select public.generate_milestones_for_season('33333333-3333-3333-3333-333333333333');
+select public.generate_milestones_for_season((select id from public.seasons where slug = 't1-verity' limit 1));
 
 -- =====================================================================
--- 6. Conteúdo extra de exemplo
+-- 6. Conteúdo extra
 -- =====================================================================
-insert into public.chapter_extra_content (chapter_id, kind, title, description, external_url, position, is_public)
-select c.id, 'pdf', 'Guia de leitura — Capítulos I a V',
-       'Perguntas para discussão em grupo e citações marcantes.',
-       'https://exemplo.clube/guia-cap1.pdf', 1, true
-from public.chapters c where c.number = 1
-  and c.season_id = '33333333-3333-3333-3333-333333333333'
-  AND NOT EXISTS (SELECT 1 FROM public.chapter_extra_content x WHERE x.chapter_id = c.id AND x.title = 'Guia de leitura — Capítulos I a V');
-
-insert into public.chapter_extra_content (chapter_id, kind, title, description, external_url, position, is_public)
-select c.id, 'slides', 'Slides do encontro ao vivo',
-       'Deck usado na discussão síncrona.',
-       'https://exemplo.clube/slides-cap1.pdf', 2, true
-from public.chapters c where c.number = 1
-  and c.season_id = '33333333-3333-3333-3333-333333333333'
-  AND NOT EXISTS (SELECT 1 FROM public.chapter_extra_content x WHERE x.chapter_id = c.id AND x.title = 'Slides do encontro ao vivo');
+-- Sem links externos fictícios; adicionar material somente quando publicado.
 
 -- =====================================================================
 -- 7. Atividade interativa de exemplo
@@ -99,18 +80,19 @@ from public.chapters c where c.number = 1
 insert into public.chapter_activities (chapter_id, kind, status, title, instructions, config, xp_reward, position)
 select
   c.id, 'crossword', 'published',
-  'Palavras cruzadas — personagens do romance',
-  'Complete as lacunas com os nomes dos personagens.',
+  'Palavras cruzadas — personagens de Verity',
+  'Complete as lacunas com nomes apresentados na sinopse editorial.',
   jsonb_build_object(
-    'rows', 5, 'cols', 5,
+    'rows', 6, 'cols', 6,
     'words', jsonb_build_array(
-      jsonb_build_object('word','BENTINHO','row',0,'col',0,'dir','h'),
-      jsonb_build_object('word','CAPITU','row',2,'col',0,'dir','h')
+      jsonb_build_object('word','LOWEN','row',0,'col',0,'dir','h'),
+      jsonb_build_object('word','VERITY','row',2,'col',0,'dir','h'),
+      jsonb_build_object('word','JEREMY','row',4,'col',0,'dir','h')
     )
   ),
   25, 1
 from public.chapters c where c.number = 1
-  and c.season_id = '33333333-3333-3333-3333-333333333333'
+  and c.season_id = (select id from public.seasons where slug = 't1-verity' limit 1)
 ON CONFLICT (chapter_id, position) DO NOTHING;
 
 -- =====================================================================
@@ -118,11 +100,11 @@ ON CONFLICT (chapter_id, position) DO NOTHING;
 -- =====================================================================
 insert into public.chapter_prompts (chapter_id, position, prompt, hint, min_chars, max_chars)
 select c.id, 1,
-       'Qual sua hipótese sobre o ciúme de Bentinho antes de terminar o capítulo?',
-       'Não há resposta certa — anote sua leitura.',
+       'Que detalhe da narrativa influencia sua confiança nas versões da história até aqui?',
+       'Não há resposta certa — anote sua leitura sem spoilers.',
        20, 2000
 from public.chapters c where c.number = 3
-  and c.season_id = '33333333-3333-3333-3333-333333333333'
+  and c.season_id = (select id from public.seasons where slug = 't1-verity' limit 1)
 ON CONFLICT (chapter_id, position) DO NOTHING;
 
 -- =====================================================================
@@ -164,9 +146,9 @@ on conflict (code) do nothing;
 insert into public.newsletter_issues (slug, subject, preview_text, body_markdown, audience_filter, created_by)
 select
   'boas-vindas-t1',
-  'Bem-vindo ao Clube — Temporada Dom Casmurro',
+  'Bem-vindo ao Clube — Temporada Verity',
   'Começamos a leitura dia 1º. Veja como funciona.',
-  E'# Bem-vindo ao Clube\n\nNesta temporada lemos **Dom Casmurro**.\n\n- Leia em blocos.\n- Marque o progresso.\n- Comente sem spoilers.',
+  E'# Bem-vindo ao Clube\n\nNesta temporada lemos **Verity**, de Colleen Hoover.\n\n- Leia em blocos.\n- Marque o progresso.\n- Comente sem spoilers.',
   '{"tags":["welcome"]}'::jsonb,
   (select id from public.profiles where role = 'admin' limit 1)
 ON CONFLICT (slug) DO NOTHING;

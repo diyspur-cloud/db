@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test.mjs && node business-rules.mjs && node final-fixes.mjs && node publication-visibility.mjs"
+    "test": "node test.mjs && node business-rules.mjs && node final-fixes.mjs && node publication-visibility.mjs && node book-edition-metadata.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8"
