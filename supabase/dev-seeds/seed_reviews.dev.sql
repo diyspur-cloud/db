@@ -1,20 +1,18 @@
 -- DEV ONLY. Não aplicar no projeto remoto de produção.
--- Requer o seed de Dom Casmurro e ao menos um perfil role='admin'.
+-- Requer o seed de Verity e ao menos um perfil role='admin'.
 -- Se não houver perfil administrador, o INSERT afetará zero linhas.
 insert into public.book_reviews (book_id, user_id, rating, spice_level, review_text)
 select
-  '22222222-2222-2222-2222-222222222222'::uuid,
+  b.id,
   p.id,
   4.50,
   1,
-  'Dom Casmurro segue sendo uma das obras mais enigmáticas da literatura brasileira.'
+  'Verity combina suspense psicológico e uma narrativa cheia de versões.'
 from public.profiles p
+cross join public.books b
 where p.role = 'admin'
-  and exists (
-    select 1 from public.books b
-    where b.id = '22222222-2222-2222-2222-222222222222'::uuid
-  )
-order by p.id
+  and b.slug = 'verity'
+order by p.id, b.id
 limit 1
 on conflict (book_id, user_id) do update
 set rating = excluded.rating,
