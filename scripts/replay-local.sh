@@ -29,7 +29,8 @@ Usage: scripts/replay-local.sh [auto|--reduced|--full]
             otherwise use the existing PGlite reduced replay (default)
   --reduced run only the PGlite replay; it never reaches a remote project
   --full    copy Supabase migrations to a temporary directory, apply the
-            replay overlay in that copy, and reset/query only the local stack
+            replay correction in that copy, reset/query only the local stack,
+            then load and validate seed.sql and seed_complement.sql twice
 
 The historical migration in this repository is never edited and no --linked,
 --db-url, or remote Supabase command is used.
@@ -42,8 +43,12 @@ USAGE
     ;;
 esac
 
-if ! command -v supabase >/dev/null 2>&1; then
-  echo "ERROR: --full requires the Supabase CLI." >&2
+if command -v supabase >/dev/null 2>&1; then
+  SUPABASE_CLI=(supabase)
+elif command -v npx >/dev/null 2>&1; then
+  SUPABASE_CLI=(npx --yes supabase@2.120.0)
+else
+  echo "ERROR: --full requires the Supabase CLI or npx." >&2
   exit 2
 fi
 if ! command -v docker >/dev/null 2>&1 || ! timeout 5 docker info >/dev/null 2>&1; then
@@ -53,7 +58,7 @@ fi
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/diyspur-replay.XXXXXX")"
 cleanup() {
-  supabase stop --workdir "$TMP_ROOT" --no-backup >/dev/null 2>&1 || true
+  "${SUPABASE_CLI[@]}" stop --workdir "$TMP_ROOT" --no-backup >/dev/null 2>&1 || true
   rm -rf "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM
@@ -75,7 +80,16 @@ if text.count(old) != 1:
 path.write_text(text.replace(old, new))
 PY
 
-supabase start --workdir "$TMP_ROOT"
-supabase db reset --local --workdir "$TMP_ROOT" --yes --no-seed
-supabase db query --local --workdir "$TMP_ROOT" --file "$ROOT/supabase/tests/sdd_contract.test.sql"
-echo "RESULT: FULL local Supabase/Docker replay PASS (temporary copy only; no remote target)"
+"${SUPABASE_CLI[@]}" start --workdir "$TMP_ROOT"
+"${SUPABASE_CLI[@]}" db reset --local --workdir "$TMP_ROOT" --yes --no-seed
+
+# Seeds are loaded explicitly rather than relying only on db reset's implicit
+# seed phase. Replaying both files twice proves the guards are idempotent.
+for pass in 1 2; do
+  echo "INFO: loading seed.sql and seed_complement.sql (pass $pass)"
+  "${SUPABASE_CLI[@]}" db query --local --workdir "$TMP_ROOT" --file "$ROOT/supabase/seed.sql"
+  "${SUPABASE_CLI[@]}" db query --local --workdir "$TMP_ROOT" --file "$ROOT/supabase/seed_complement.sql"
+done
+"${SUPABASE_CLI[@]}" db query --local --workdir "$TMP_ROOT" --file "$ROOT/scripts/replay-local.seed-check.sql"
+"${SUPABASE_CLI[@]}" db query --local --workdir "$TMP_ROOT" --file "$ROOT/supabase/tests/sdd_contract.test.sql"
+echo "RESULT: FULL local Supabase/Docker replay + double seed validation PASS (temporary copy only; no remote target)"

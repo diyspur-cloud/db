@@ -5,8 +5,8 @@
 ## Estado resumido
 
 - **Resolvido no Supabase:** migration `20261009020600` aplicada e confirmada no histórico/catálogo; tabelas, RPCs, view e triggers novos foram inspecionados.
-- **Resolvido no repositório:** tipos TypeScript gerados do schema pós-migration; fonte de 11 Edge Functions corrigida; smoke PGlite ampliado; workflows CI/deploy manual criados; SDD e README atualizados.
-- **Não resolvido e não declarar sucesso:** deploy das Edge Functions, secrets de provedores, testes mutantes com Auth/Storage/Realtime real, proteção de reviewers no ambiente GitHub e reconciliação das migrations baseline.
+- **Resolvido no repositório nesta execução:** UUID canônica aceita pelo seed; cinco migrations incrementais geradas pela CLI para stats/overview/metas/snapshot/quiz parcial; handler de quiz parcial; paginação de reminders; adapters de Storage, Realtime, profile, leitura, stats, clubes, social, votação, quiz e cards; reexports shared; replay explícito com dupla carga de seeds; OpenAPI e documentação atualizados.
+- **Não resolvido e não declarar sucesso:** aplicação remota dessas cinco migrations, providers OAuth hospedados, secrets de provedores, IDs reais de preços Stripe, URLs reais de conteúdo, testes mutantes Auth/Storage/Realtime em staging e reconciliação da migration remota `20261009162640_close_sdd_backend_contract_gaps`.
 - **Restrição decidida:** o usuário recusou criar um branch Supabase após ser informado do custo recorrente cotado de **US$ 0,01344 por hora**. Nenhum branch foi criado. O único projeto conectado é o alvo de produção; teste mutante foi omitido para preservar dados.
 
 ## Itens resolvidos no schema
@@ -31,13 +31,13 @@
 
 1. **Staging/Auth/Storage/Realtime:** executar `scripts/integration-smoke/test.ts` em branch/projeto descartável, com pelo menos dois usuários reais; cobrir leitor/admin e limpeza dos recursos. O harness está typechecked/linted/formatado e recusa explicitamente o ref de produção.
 2. **Secrets e funções:** fornecer/configurar segredos de runtime por stores apropriados. Nomes exigidos no gate de deploy: `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` e `SCHEDULED_REMINDERS_SECRET`. Esta sessão não obteve seus valores nem listou/substituiu valores já salvos.
-3. **Deploy:** inventário remoto continha zero Edge Functions. O workflow manual faz validação, compara o ref digitado e confere presença dos nomes dos secrets, mas ainda precisa de GitHub `SUPABASE_ACCESS_TOKEN`, variável `SUPABASE_PROJECT_REF` e proteção do ambiente `production` com reviewers. Nenhum deploy ocorreu.
+3. **Deploy:** inventário remoto confirma 11 Edge Functions `ACTIVE`, mas nenhuma foi redeployada a partir do working tree desta execução. O workflow manual faz validação, compara o ref digitado e confere presença dos nomes dos secrets; ainda precisa de GitHub `SUPABASE_ACCESS_TOKEN`, variável `SUPABASE_PROJECT_REF` e proteção do ambiente `production` com reviewers.
 4. **Clientes externos de `award_xp`:** localizar aplicações/serviços fora deste repositório que dependam de execução direta; redirecionar para handler servidor autenticado. Não restaurar grant a `anon`/`authenticated` sem novo desenho.
-5. **Baseline CLI:** 24 entradas remotas `sdd_*` não mapeiam diretamente para migrations granulares locais `20260101…`. Projetar/revisar reconciliação num banco descartável antes de usar `supabase db push`. A migration mais nova tem ref `20261009020600`, mas isso não corrige o baseline histórico.
+5. **Baseline CLI:** 24 entradas remotas `sdd_*`, 26 incrementais e `20261009162640_close_sdd_backend_contract_gaps` não mapeiam diretamente para migrations granulares locais `20260101…`. Projetar/revisar reconciliação num banco descartável antes de usar `supabase db push`.
 6. **Extensões:** os advisors mantêm 5 extensions em `public` (`vector`, `pg_trgm`, `citext`, `unaccent`, `btree_gin`). Mudar o schema delas exige staging com teste de tipos, operadores, índices e search path.
 7. **Performance:** medir tráfego antes de investigar 113 índices `unused_index` e 165 findings de policies permissivas; não remover índices de FK nem refatorar o modelo por contadores do advisor isoladamente.
 8. **Backup:** nenhum restore point manual foi criado para a rodada. Criar e validar ponto de restauração antes de futuras mudanças estruturais.
-9. **Frontend:** repositório é de backend; integrar APIs/views/RPCs ao produto e confirmar compatibilidade do contrato é trabalho separado.
+9. **Frontend:** adapters seguros foram adicionados em `src/lib/supabase`, mas o clone continua sem aplicação/telas para executar o fluxo visual. Integração das telas e confirmação de compatibilidade do produto continuam trabalho separado.
 10. **Cron:** refresh da MV tem job `pg_cron`; não criar cron HTTP de reminders até deploy e autenticação serviço-a-serviço estarem testados.
 11. **Seeds:** sementes de exemplo permanecem locais. O preflight encontrou 0 perfis e 0 admins antes da migration; não aplicar seed demonstrativo à produção.
 

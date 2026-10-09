@@ -2,12 +2,13 @@
 
 **Snapshot:** 2026-10-09, UTC−03:00 (catálogo consultado após a migration).
 **Projeto:** `xjhehhfhhoomblcggjpk` — [Dashboard](https://supabase.com/dashboard/project/xjhehhfhhoomblcggjpk)
-**Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db), branch de implementação `fix/audit-followups`.
-**Migration desta rodada:** versão remota `20261009020600`; arquivo local `supabase/migrations/20261009020600_20261009014533_implement_audit_followups.sql`.
-**Escopo:** regras de XP/quiz/metas/likes/votos, overview de leitura, reminders, newsletter, Stripe e overlaps de leitores; correções em 11 Edge Function sources, testes, tipos e workflows.
-**Não feito:** deploy de Edge Functions, Auth/Storage/Realtime mutante em production, criação de branch, reescrita do histórico CLI, backup/restore point nesta rodada.
+**Repositório:** [`diyspur-cloud/db`](https://github.com/diyspur-cloud/db), clone local na branch `main`, commit auditado `ce0355e19e9c45e915cb8d376efa3e0ced1da773`.
+**Estado remoto:** histórico consultado contém 51 migrations e a versão mais recente é `20261009162640_close_sdd_backend_contract_gaps`; o inventário de Edge Functions contém 11 funções `ACTIVE`.
+**Alterações desta execução:** cinco migrations incrementais geradas pela CLI, handlers corrigidos, adapters frontend e documentação. Tudo permanece local; não houve `db push`, deploy de functions, reset remoto ou DML remoto.
+**Escopo:** UUID canônica, snapshot comunitário, overview/metas/snapshot de leitura, quiz parcial, paginação de reminders, consumidores Storage/Realtime/RPCs e reconciliação documental.
+**Não feito:** aplicação remota das cinco migrations novas, providers OAuth, mapping de preços Stripe, secrets/URLs de conteúdo, criação de branch, backup/restore point nesta rodada.
 
-> **Estado:** a migration consta em `supabase_migrations.schema_migrations` e os novos objetos foram conferidos no catálogo. As verificações locais de SQL, Deno e PGlite passaram. Os 11 handlers estão apenas versionados; o inventário remoto de Edge Functions retorna vazio. Não declarar integração end-to-end nem deployment de funções aprovados.
+> **Estado:** as migrations novas não constam no histórico remoto desta execução. O catálogo remoto confirma 11 handlers `ACTIVE`, mas as versões hospedadas não são automaticamente iguais ao working tree local. Não declarar integração end-to-end, sincronização de fonte nem aplicação remota das migrations sem o gate de reconciliação.
 
 ## 1. Catálogo remoto depois da aplicação
 
@@ -24,15 +25,15 @@
 | Triggers de aplicação públicos | 17 | Contadores/estatísticas e timestamps calculados no banco. |
 | Tabelas em `supabase_realtime` | 15 | Publicação preexistente preservada. |
 | Buckets Storage | 10 | Inclui `feed-media` privado e outras policies existentes. |
-| Histórico remoto | 38 migrations | 24 entradas históricas `sdd_*` + 14 complementares, incluindo versão `20261009020600`. |
+| Histórico remoto | 51 migrations | 24 entradas históricas `sdd_*`, 26 incrementais e `20261009162640_close_sdd_backend_contract_gaps`. |
 | `SECURITY DEFINER` em schema `private` | 16 | Helpers internos; o schema `private` não está exposto na Data API. |
-| Edge Functions remotas | 0 | `list_edge_functions` retornou lista vazia. |
+| Edge Functions remotas | 11 `ACTIVE` | `list_edge_functions` confirmou `award-xp`, `quiz-validate`, `vote-next-book`, `scheduled-reminders`, recomendações/embeddings, matching, newsletter, Stripe, social card e embeddings de livros. |
 
 O remote usa PostgreSQL 17 (`server_version_num` consultado; `supabase/config.toml` local adota `major_version = 17`). A documentação do CLI recomenda alinhar `major_version` à versão principal real: [Supabase CLI config](https://supabase.com/docs/guides/local-development/cli/config).
 
-## 2. Migration aplicada
+## 2. Estado SQL remoto e alterações locais
 
-A migration foi aplicada pelo Supabase MCP ao projeto identificado, após validação local e após o usuário recusar a criação do branch isolado solicitado no anexo. A versão `20261009020600` foi conferida no histórico remoto; a existência de `reading_journal_likes`, view e RPCs foi consultada pelo catálogo. O tipo TypeScript foi regenerado do schema remoto depois da aplicação.
+O catálogo remoto confirma a migration histórica `20261009020600` e as correções posteriores, incluindo `20261009162640_close_sdd_backend_contract_gaps`. Esses objetos são evidência do estado hospedado, não aplicação das cinco migrations novas desta execução. O working tree local contém as migrations incrementais geradas pela CLI e os adapters/handlers revisados; a fonte remota e o source local ainda precisam ser comparados antes de qualquer push.
 
 ### Regras e objetos adicionados/alterados
 
@@ -70,7 +71,7 @@ O estado pós-migration manteve **5 findings `extension_in_public`**: `vector`, 
 
 Fonte local presente para 11 nomes: `award-xp`, `vote-next-book`, `scheduled-reminders`, `ai-recommendations`, `ai-user-embeddings`, `match-readers`, `newsletter-dispatch`, `stripe-webhook`, `social-render-card`, `quiz-validate` e `generate-book-embeddings`. O código usa identidade derivada de JWT, papel Admin consultado no banco ou autenticação de serviço/assinatura Stripe conforme o endpoint. Veja [`edge-functions-authorization.md`](./edge-functions-authorization.md).
 
-**Nenhuma foi publicada.** Não foram fornecidos secrets de provedores para registro. Não inferimos, imprimimos nem sobrescrevemos secrets de runtime Supabase. O workflow manual [`deploy-edge-functions.yml`](../.github/workflows/deploy-edge-functions.yml) exige:
+**O remoto já possui 11 funções `ACTIVE`**, confirmadas por `list_edge_functions`, com versões hospedadas independentes do working tree local. Nesta execução nenhuma foi redeployada. Não foram fornecidos secrets de provedores para registro. Não inferimos, imprimimos nem sobrescrevemos secrets de runtime Supabase. O workflow manual [`deploy-edge-functions.yml`](../.github/workflows/deploy-edge-functions.yml) exige:
 
 - `SUPABASE_ACCESS_TOKEN` como GitHub secret e `SUPABASE_PROJECT_REF` como repository variable;
 - project ref explicitamente digitado igual à variável;
@@ -85,16 +86,20 @@ O workflow executa de novo SQL parser, PGlite e validação Deno; o job só publ
 
 | Verificação | Resultado |
 |---|---|
-| `pglast` em SQL de `supabase/` | 57/57 arquivos parseados; zero erros. |
+| `pglast` em SQL de `supabase/` | 75/75 arquivos parseados; zero erros. |
 | PGlite RLS e smoke anterior | Passou. |
 | PGlite `business-rules.mjs` | Passou para regras XP, quiz, metas, likes, polls, reminders, newsletter, Stripe e matching. |
-| Deno `check` das 11 funções | Passou com compiler options strict e dependências fixadas. |
-| Deno `lint` das funções | Passou. |
-| Deno `fmt:check` das funções | Passou. |
+| Deno `check` das 11 funções + teste shared | Passou com Deno 2.9.7. |
+| Deno `lint` das funções + teste shared | Passou. |
+| Deno `fmt:check` das funções + teste shared | Passou. |
+| Deno `test _shared/auth.test.ts` | 2/2 passaram: seed UUID aceita; formatos inválidos rejeitados. |
 | `deno check` do `database.types.ts` remoto | Passou. |
 | Check/lint/format do harness Auth/Storage/Realtime | Passou. |
-| `git diff --check` | Executado sem whitespace errors antes da finalização do branch. |
-| Supabase MCP | Aplicação da migration e consultas read-only de histórico/catálogo/advisors confirmadas. |
+| Replay reduzido `scripts/replay-local.sh --reduced` | Passou: overlay histórico, stats/snapshot alinhados e `sdd_contract.test.sql`; não é full reset. |
+| TypeScript temporário dos adapters/React | Passou com `typescript`, React, Next e clientes Supabase instalados em `/tmp`; nenhuma dependência foi gravada no repositório. |
+| OpenAPI YAML + assertions de contrato | Passou: UUID canônica, quiz parcial e status de card. |
+| `git diff --check` | Passou sem whitespace errors. |
+| Supabase MCP | Consultas read-only de migrations, Edge Functions e advisors confirmadas; nenhuma migration/deploy foi aplicada nesta execução. |
 
 Os testes PGlite são testes reproduzíveis do SQL em Postgres WASM; não executam JWT Auth real, Data API hospedada, Storage service ou WebSocket Realtime.
 
@@ -102,21 +107,22 @@ Os testes PGlite são testes reproduzíveis do SQL em Postgres WASM; não execut
 
 1. Integração mutante Auth/Storage/Realtime real: deliberadamente não executada em produção.
 2. Testes com contas reais de titular/admin, admin newsletter, provider Stripe/Resend/OpenAI ou resposta de webhooks: exigem staging e secrets.
-3. Deploy de Edge Functions, monitoramento de logs e cron HTTP: funções remotas inexistentes; não foi configurado cron de reminders.
-4. `supabase db push`/reconciliação do baseline: não executado devido ao histórico remoto `sdd_*` diferente dos arquivos locais `20260101…`.
+3. Replay full com Docker/Supabase local: Docker não está disponível no sandbox; o runner full não foi declarado como aprovado.
+4. Redeploy das versões locais, monitoramento de logs e cron HTTP de reminders: o remoto tem funções ativas, mas esta execução não publicou o working tree nem validou efeitos de negócio.
+5. `supabase db push`/reconciliação do baseline: não executado devido ao histórico remoto `sdd_*`, aos increments renumerados e a `20261009162640_close_sdd_backend_contract_gaps` não presente no clone.
 
 `scripts/integration-smoke/test.ts` recusa o ref de produção, exige `SUPABASE_TEST_ALLOW_MUTATIONS=true` e apaga dados temporários em `finally`. A branch Supabase proposta foi recusada por custo recorrente de US$ 0,01344/h. O procedimento documentado está em [`scripts/integration-smoke/README.md`](../scripts/integration-smoke/README.md).
 
 ## 6. Estado de GitHub / CI
 
-- Fonte modificada em branch `fix/audit-followups`; alterações aguardam publicação/revisão pelo PR e CI.
+- Fonte modificada localmente na branch `main`; alterações aguardam commit/revisão e CI antes de publicação.
 - [`ci.yml`](../.github/workflows/ci.yml) valida SQL, PGlite, types, Deno e checks estáticos do harness sem acessar Supabase secrets.
 - Não existem actions que façam `db push`, gravem secrets, executem testes mutantes automaticamente ou deployem functions em todo push.
 - Os arquivos públicos foram varridos para padrões típicos de chave publishable/secret, token Stripe live e webhook secret; nenhum literal desses formatos foi encontrado.
 
 ## 7. Migrations CLI e operação futura
 
-O histórico remoto tem 24 versões históricas agregadas `sdd_*` e 14 versões complementares numeradas em `20261008…`/`20261009…`. O conjunto local baseline é granular `20260101…` e não corresponde diretamente aos nomes já aplicados; um `supabase migration list` que compare essas fontes pode mostrar drift real. A aplicação MCP registra a migration nova, mas **não reconcilia retroativamente** o baseline antigo.
+O histórico remoto tem 24 versões históricas agregadas `sdd_*`, 26 versões complementares numeradas e `20261009162640_close_sdd_backend_contract_gaps`. O conjunto local baseline é granular `20260101…` e não corresponde diretamente aos nomes já aplicados; um `supabase migration list` que compare essas fontes mostra drift real. As cinco migrations novas desta execução ainda não foram registradas remotamente e não devem ser empurradas até comparar a versão `close_sdd_backend_contract_gaps`.
 
 Até produzir e revisar um plano de baseline/repair isolado:
 

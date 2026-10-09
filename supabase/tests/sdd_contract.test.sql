@@ -73,6 +73,77 @@ begin
 end;
 $$;
 
+do $$
+declare
+  stats_column_count integer;
+  stats_numeric_count integer;
+  overview_invoker boolean;
+  snapshot_definition text;
+  quiz_constraint text;
+begin
+  select count(*)::integer
+    into stats_column_count
+    from information_schema.columns
+   where table_schema = 'public'
+     and table_name = 'v_book_community_stats';
+
+  if stats_column_count <> 8 then
+    raise exception
+      'SDD contract failed: public.v_book_community_stats exposes % columns; expected 8',
+      stats_column_count;
+  end if;
+
+  select count(*)::integer
+    into stats_numeric_count
+    from information_schema.columns
+   where table_schema = 'public'
+     and table_name = 'v_book_community_stats'
+     and column_name in ('avg_rating', 'avg_spice_level')
+     and data_type = 'numeric';
+
+  if stats_numeric_count <> 2 then
+    raise exception
+      'SDD contract failed: community averages are not numeric';
+  end if;
+
+  if to_regclass('public.v_user_reading_overview') is not null then
+    select coalesce('security_invoker=true' = any(c.reloptions), false)
+      into overview_invoker
+      from pg_class as c
+     where c.oid = 'public.v_user_reading_overview'::regclass;
+
+    if not overview_invoker then
+      raise exception
+        'SDD contract failed: v_user_reading_overview is not security_invoker';
+    end if;
+  end if;
+
+  select pg_get_functiondef(
+    'public.build_user_reading_snapshot(uuid)'::regprocedure
+  )
+    into snapshot_definition;
+
+  if position('book_title' in lower(snapshot_definition)) > 0
+     or position('title' in lower(snapshot_definition)) = 0 then
+    raise exception
+      'SDD contract failed: reading snapshot keys are not title-based';
+  end if;
+
+  if to_regclass('public.quiz_answers') is not null then
+    select pg_get_constraintdef(pc.oid)
+      into quiz_constraint
+      from pg_constraint as pc
+     where pc.conrelid = 'public.quiz_answers'::regclass
+       and pc.conname = 'quiz_answers_chosen_idx_original_check';
+
+    if quiz_constraint is null or position('-1' in quiz_constraint) = 0 then
+      raise exception
+        'SDD contract failed: quiz_answers does not allow chosen_idx=-1';
+    end if;
+  end if;
+end;
+$$;
+
 commit;
 
 select 'PASS: SDD community replay contract' as result;

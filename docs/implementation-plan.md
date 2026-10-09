@@ -232,17 +232,17 @@ As 14 migrations complementares registradas para esta implementação são:
 13. `20261008225856 encapsulate_profile_consent_privilege`
 14. `20261009020600 20261009014533_implement_audit_followups`
 
-Os nomes/versões acima foram confirmados no histórico remoto e espelhados nos arquivos do repositório. A versão mais nova foi aplicada pelo Supabase MCP e é refletida pelo prefixo `20261009020600` no arquivo local. O histórico baseline anterior permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. O total remoto atual é 38 migrations (24 históricas + 14 complementares).
+Os nomes/versões acima são o conjunto original de 14 complementares. A consulta remota de 2026-10-09 também encontrou 12 correções posteriores com timestamps renumerados e `20261009162640_close_sdd_backend_contract_gaps`; o total atual é **51 migrations** (24 históricas `sdd_*` + 26 incrementais + `close_sdd_backend_contract_gaps`). O histórico baseline permanece com nomes agregados `sdd_*`; por isso a advertência de não executar CLI push sem reconciliação continua válida. As cinco migrations novas desta execução são locais e ainda não foram aplicadas.
 
 ## 8. Decisões de escopo e itens do anexo adiados
 
-A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As 14 migrations complementares estão versionadas com as versões remotas exatas; baseline antigo segue bloqueado para `db push`.
+A reconciliação/repair do histórico baseline não foi executada. O projeto já tinha 24 entradas históricas `sdd_*`; inserir de novo os mesmos pares com `ON CONFLICT DO NOTHING` não alinha os arquivos granulares locais `20260101…`, e escrita manual no schema de migrations cria risco ao CLI. As correções posteriores têm correspondências por nome lógico, mas não foram tratadas como igualdade byte a byte; baseline antigo segue bloqueado para `db push`.
 
 As cinco extensões em `public` foram mantidas. O endpoint de branches do Supabase não listou um ambiente isolado; sem branch de teste, mover extensões que fornecem tipos e operadores pode quebrar colunas, índices, RPCs ou search path. A pendência fica para uma mudança futura com cópia/restauração e validação de dependências.
 
-O job de refresh da MV foi implementado. O cron HTTP de `scheduled-reminders` não foi criado porque a Edge Function não está implantada e não há credencial de serviço configurada; um job horário sem autenticação produziria falhas recorrentes. O contrato de autorização está documentado em `docs/edge-functions-authorization.md`.
+O job de refresh da MV foi implementado. O cron HTTP de `scheduled-reminders` não foi exercitado nesta execução; a Edge Function existe como `ACTIVE` no remoto, mas o source local não foi redeployado e a credencial de serviço não foi validada. O contrato de autorização está documentado em `docs/edge-functions-authorization.md`.
 
-Seeds idempotentes de review/clube permanecem em `supabase/dev-seeds/`, sem aplicação ao projeto remoto. O preflight encontrou zero perfis e zero admins; nenhum dado demonstrativo foi inserido. As fontes das 11 Edge Functions foram atualizadas e checadas estaticamente, mas nenhuma foi implantada: credenciais de provedores não foram fornecidas e faltou staging seguro. A validação RLS com duas sessões JWT reais continua necessária em ambiente isolado.
+Seeds idempotentes de review/clube permanecem em `supabase/dev-seeds/`, sem aplicação ao projeto remoto. O preflight encontrou zero perfis e zero admins; nenhum dado demonstrativo foi inserido. As fontes das 11 Edge Functions foram atualizadas e checadas estaticamente; o remoto já possui 11 versões `ACTIVE`, mas nenhum redeploy ocorreu nesta execução. Credenciais de provedores não foram fornecidas e faltou staging seguro. A validação RLS com duas sessões JWT reais continua necessária em ambiente isolado.
 
 
 ## 9. Plano de desenvolvimento ponta a ponta — próximos passos

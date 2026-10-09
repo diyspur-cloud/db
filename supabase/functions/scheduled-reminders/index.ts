@@ -13,17 +13,17 @@ Deno.serve(async (req) => {
     const now = new Date();
     const until = new Date(now.getTime() + 48 * 60 * 60_000);
     const meetingPageSize = 500;
-    const rsvpPageSize = 2_000;
+    // config.toml limita a resposta da Data API a 1000 linhas. Manter margem
+    // para ambientes com limite menor evita encerrar a paginação cedo.
+    const rsvpPageSize = 500;
     const meetings: Array<{
       id: string;
       title: string;
       scheduled_at: string;
     }> = [];
     for (let offset = 0;; offset += meetingPageSize) {
-      // Decisão preservada do handler existente: somente reuniões scheduled
-      // dentro da janela e RSVP attending=true recebem lembrete. O SDD não
-      // define regra para cancelled/live ou RSVP negativo, então não os
-      // promovemos silenciosamente a destinatários.
+      // Somente reuniões scheduled dentro da janela e RSVP attending=true
+      // recebem lembrete; status/opt-out não são promovidos silenciosamente.
       const { data, error } = await service.from("meetings")
         .select("id,title,scheduled_at")
         .eq("status", "scheduled")

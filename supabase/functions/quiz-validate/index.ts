@@ -4,10 +4,16 @@ import { json, requestUser, serviceClient, UUID_RE } from "../_shared/auth.ts";
 const MAX_QUESTIONS = 50;
 
 type AnswerInput = { question_id: string; chosen_idx: number };
+type QuizQuestion = {
+  id: string;
+  correct_idx: number;
+  options: unknown;
+};
+type QuizDetail = AnswerInput & { is_correct: boolean };
+
 function parseAnswers(value: unknown): AnswerInput[] | null {
-  if (
-    !Array.isArray(value) || value.length < 1 || value.length > MAX_QUESTIONS
-  ) return null;
+  // Array vazio significa que nenhuma pergunta foi respondida.
+  if (!Array.isArray(value) || value.length > MAX_QUESTIONS) return null;
   const seen = new Set<string>();
   const result: AnswerInput[] = [];
   for (const item of value) {
@@ -16,7 +22,8 @@ function parseAnswers(value: unknown): AnswerInput[] | null {
     if (
       typeof answer.question_id !== "string" ||
       !UUID_RE.test(answer.question_id) ||
-      !Number.isInteger(answer.chosen_idx) || seen.has(answer.question_id)
+      !Number.isInteger(answer.chosen_idx) ||
+      seen.has(answer.question_id)
     ) return null;
     seen.add(answer.question_id);
     result.push({
@@ -39,6 +46,41 @@ function canonicalAnswers(
       })
       .map(({ question_id, chosen_idx }) => ({ question_id, chosen_idx })),
   );
+}
+
+function buildDetails(
+  questions: QuizQuestion[],
+  answers: AnswerInput[],
+): { normalized: AnswerInput[]; details: QuizDetail[] } | {
+  error: "unexpected_answers" | "invalid_quiz_configuration_or_answer";
+} {
+  const questionIds = new Set(questions.map((question) => question.id));
+  if (answers.some((answer) => !questionIds.has(answer.question_id))) {
+    return { error: "unexpected_answers" };
+  }
+  const answerMap = new Map(
+    answers.map((answer) => [answer.question_id, answer.chosen_idx]),
+  );
+  const normalized: AnswerInput[] = [];
+  const details: QuizDetail[] = [];
+  for (const question of questions) {
+    const chosen = answerMap.get(question.id) ?? -1;
+    const options = Array.isArray(question.options)
+      ? question.options.length
+      : 0;
+    if (
+      options < 1 || !Number.isInteger(question.correct_idx) ||
+      question.correct_idx < 0 || question.correct_idx >= options ||
+      chosen < -1 || chosen >= options
+    ) {
+      return { error: "invalid_quiz_configuration_or_answer" };
+    }
+    const isCorrect = chosen >= 0 && chosen === question.correct_idx;
+    const normalizedAnswer = { question_id: question.id, chosen_idx: chosen };
+    normalized.push(normalizedAnswer);
+    details.push({ ...normalizedAnswer, is_correct: isCorrect });
+  }
+  return { normalized, details };
 }
 
 async function finishExisting(
@@ -124,9 +166,8 @@ Deno.serve(async (req) => {
     const suppliedRequestId = req.headers.has("Idempotency-Key")
       ? req.headers.get("Idempotency-Key")
       : payload.request_id;
-    // Compatibilidade com o payload antigo: sem chave, esta submissão recebe
-    // uma identidade nova no servidor. Retries devem reenviar a mesma UUID
-    // fornecida para aproveitar a idempotência persistida.
+    // Sem chave explícita, a chamada continua compatível, mas não há
+    // identidade persistida para retries posteriores.
     const requestId = suppliedRequestId === undefined
       ? crypto.randomUUID()
       : suppliedRequestId;
@@ -135,20 +176,43 @@ Deno.serve(async (req) => {
       typeof chapterId !== "string" || !UUID_RE.test(chapterId) ||
       typeof requestId !== "string" || !UUID_RE.test(requestId) || !answers
     ) {
-      return json({ error: "invalid_payload_or_missing_idempotency_key" }, 400);
+      return json({ error: "invalid_payload" }, 400);
     }
+
     const service = serviceClient();
+    const { data: questions, error: questionsError } = await service.from(
+      "quiz_questions",
+    )
+      .select("id,correct_idx,options").eq("chapter_id", chapterId).order(
+        "position",
+      ).limit(MAX_QUESTIONS + 1);
+    if (questionsError) return json({ error: "temporarily_unavailable" }, 503);
+    if (!questions?.length) return json({ error: "quiz_not_found" }, 404);
+    if (questions.length > MAX_QUESTIONS) {
+      return json({ error: "quiz_too_large" }, 422);
+    }
+    const built = buildDetails(questions as QuizQuestion[], answers);
+    if ("error" in built) {
+      return json(
+        {
+          error: built.error === "unexpected_answers"
+            ? "unexpected_answers"
+            : built.error,
+        },
+        built.error === "unexpected_answers" ? 400 : 422,
+      );
+    }
+
     const existing = await finishExisting(
       service,
       user.id,
       requestId,
       chapterId,
-      answers,
+      built.normalized,
     );
     if (existing) return existing.response;
 
-    // Publicly available chapter access is defined by an active/finished season;
-    // future-scheduled chapters remain inaccessible until their publish timestamp.
+    // Capítulo futuro e temporadas não publicadas não aceitam novas tentativas.
     const { data: chapter, error: chapterError } = await service.from(
       "chapters",
     )
@@ -185,65 +249,21 @@ Deno.serve(async (req) => {
         user.id,
         requestId,
         chapterId,
-        answers,
+        built.normalized,
       );
       if (racedDuplicate) return racedDuplicate.response;
       return json({ error: "rate_limited", retry_after_seconds: 60 }, 429);
     }
 
-    const { data: questions, error: questionsError } = await service.from(
-      "quiz_questions",
-    )
-      .select("id,correct_idx,options").eq("chapter_id", chapterId).order(
-        "position",
-      ).limit(MAX_QUESTIONS + 1);
-    if (questionsError) return json({ error: "temporarily_unavailable" }, 503);
-    if (!questions?.length) return json({ error: "quiz_not_found" }, 404);
-    if (questions.length > MAX_QUESTIONS) {
-      return json({ error: "quiz_too_large" }, 422);
-    }
-    const answerMap = new Map(
-      answers.map((answer) => [answer.question_id, answer.chosen_idx]),
-    );
-    if (
-      answers.length !== questions.length ||
-      questions.some((question) => !answerMap.has(question.id))
-    ) {
-      return json({ error: "incomplete_or_unexpected_answers" }, 400);
-    }
-    let score = 0;
-    const details: Array<
-      { question_id: string; chosen_idx: number; is_correct: boolean }
-    > = [];
-    for (const question of questions) {
-      const chosen = answerMap.get(question.id)!;
-      const options = Array.isArray(question.options)
-        ? question.options.length
-        : 0;
-      if (
-        options < 1 || !Number.isInteger(question.correct_idx) ||
-        question.correct_idx < 0 ||
-        question.correct_idx >= options || chosen < 0 || chosen >= options
-      ) {
-        return json({ error: "invalid_quiz_configuration_or_answer" }, 422);
-      }
-      const isCorrect = chosen === question.correct_idx;
-      if (isCorrect) score++;
-      details.push({
-        question_id: question.id,
-        chosen_idx: chosen,
-        is_correct: isCorrect,
-      });
-    }
     const { data: recorded, error: recordError } = await service.rpc(
       "record_quiz_attempt",
       {
         p_user: user.id,
         p_chapter: chapterId,
         p_request_id: requestId,
-        p_score: score,
+        p_score: built.details.filter((detail) => detail.is_correct).length,
         p_total: questions.length,
-        p_answers: details,
+        p_answers: built.details,
       },
     );
     if (recordError?.code === "22023") {
@@ -277,7 +297,7 @@ Deno.serve(async (req) => {
       attempt_id: attempt.attempt_id,
       score: attempt.score,
       total: attempt.total,
-      detail: details,
+      detail: built.details,
       duplicate: attempt.duplicate,
     });
   } catch (error) {

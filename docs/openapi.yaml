@@ -43,7 +43,7 @@ paths:
       operationId: quizValidate
       summary: Valida um quiz e atribui XP
       description: |
-        Valida todas as respostas do capítulo para o usuário autenticado,
+        Valida as respostas fornecidas para o capítulo do usuário autenticado,
         registra a tentativa e atribui 50 XP. `Idempotency-Key` tem precedência
         sobre `request_id`. Para compatibilidade, se nenhuma chave for enviada
         o servidor gera uma UUID nova; para que um retry retorne a tentativa
@@ -68,14 +68,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/QuizValidateResponse'
         '400':
-          description: JSON ou payload inválido, ou respostas incompletas/inesperadas.
+          description: JSON/payload inválido ou resposta que referencia pergunta fora do quiz.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               examples:
                 erro:
-                  value: {error: invalid_payload_or_missing_idempotency_key}
+                  value: {error: invalid_payload}
         '401':
           description: Bearer ausente, inválido ou usuário não encontrado.
           content:
@@ -778,7 +778,7 @@ components:
       type: string
       format: uuid
       description: UUID válida conforme o formato exigido pelo handler.
-      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     Error:
       type: object
       required: [error]
@@ -807,7 +807,8 @@ components:
           $ref: '#/components/schemas/UUID'
         chosen_idx:
           type: integer
-          description: Índice zero-based escolhido; índices fora das opções resultam em 422.
+          minimum: -1
+          description: Índice zero-based escolhido; -1 representa pergunta sem resposta.
       additionalProperties: true
     QuizValidateRequest:
       type: object
@@ -821,9 +822,9 @@ components:
           $ref: '#/components/schemas/UUID'
         answers:
           type: array
-          minItems: 1
+          minItems: 0
           maxItems: 50
-          description: Respostas sem question_id duplicado; deve cobrir exatamente o quiz.
+          description: Respostas sem question_id duplicado; itens ausentes são persistidos como chosen_idx=-1.
           items:
             $ref: '#/components/schemas/QuizAnswer'
       additionalProperties: true
@@ -833,7 +834,7 @@ components:
       properties:
         question_id:
           $ref: '#/components/schemas/UUID'
-        chosen_idx: {type: integer}
+        chosen_idx: {type: integer, minimum: -1}
         is_correct: {type: boolean}
       additionalProperties: false
     QuizValidateResponse:
@@ -1018,7 +1019,7 @@ components:
           type: string
           enum: [quote_card, progress_card, milestone_card, review_card, list_card, aura_card, streak_card]
         payload: {type: object, additionalProperties: true}
-        status: {type: string, const: rendered}
+        status: {type: string, enum: [queued, rendered, failed, expired]}
         image_url: {type: [string, 'null'], format: uri}
         error: {type: [string, 'null']}
         created_at: {type: string, format: date-time}

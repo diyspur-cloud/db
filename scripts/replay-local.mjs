@@ -20,6 +20,14 @@ const prerequisiteMigrations = [
 const bootstrapPath = resolve(repoRoot, "scripts/replay-local.bootstrap.sql");
 const overlayPath = resolve(repoRoot, "scripts/replay-local.overlay.sql");
 const contractPath = resolve(repoRoot, "supabase/tests/sdd_contract.test.sql");
+const communityAlignmentPath = resolve(
+  migrationDir,
+  "20261009170633_align_community_stats_snapshot.sql",
+);
+const snapshotAlignmentPath = resolve(
+  migrationDir,
+  "20261009170647_align_reading_snapshot_keys.sql",
+);
 
 function usage() {
   console.log(`Usage: node scripts/replay-local.mjs [--reduced]\n\nRuns the disposable reduced community replay in PGlite. Full Docker replay is\nowned by scripts/replay-local.sh --full; this runner never connects remotely.`);
@@ -35,11 +43,21 @@ if (process.argv.some((arg) => arg !== "--reduced" && arg !== process.argv[0] &&
   process.exit(2);
 }
 
-const [bootstrap, overlay, contract, source, ...prerequisites] = await Promise.all([
+const [
+  bootstrap,
+  overlay,
+  contract,
+  source,
+  communityAlignment,
+  snapshotAlignment,
+  ...prerequisites
+] = await Promise.all([
   readFile(bootstrapPath, "utf8"),
   readFile(overlayPath, "utf8"),
   readFile(contractPath, "utf8"),
   readFile(sourceMigration, "utf8"),
+  readFile(communityAlignmentPath, "utf8"),
+  readFile(snapshotAlignmentPath, "utf8"),
   ...prerequisiteMigrations.map((filename) => readFile(resolve(migrationDir, filename), "utf8")),
 ]);
 
@@ -104,6 +122,12 @@ async function runReducedReplay() {
   const db = await preparedDatabase();
   try {
     await applyScratchOverlay(db);
+    // O fixture reduzido não contém a migration completa de mood stats nem
+    // overview/quiz. Aplicar somente os alinhamentos que ele consegue provar
+    // mantém o teste útil sem alegar que seja um reset integral.
+    await db.exec(`alter table public.book_mood_stats add column mood_percent jsonb;`);
+    await db.exec(communityAlignment);
+    await db.exec(snapshotAlignment);
 
     await db.exec(`
       insert into public.books(id, title)
@@ -132,7 +156,7 @@ async function runReducedReplay() {
               'cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'reading', 42);
       insert into public.book_mood_stats(book_id, mood_counts, pace_percent, sample_size)
       values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '{}', '{"slow":100}', 1);
-      refresh materialized view public.mv_book_community_stats;
+      refresh materialized view private.mv_book_community_stats;
     `);
 
     const panel = await db.query(`

@@ -55,5 +55,7 @@ export function constantTimeEqual(actual: string, expected: string): boolean {
   return mismatch === 0;
 }
 
+// O banco usa UUIDs canônicos de seed que não carregam necessariamente a
+// variante/versão RFC. A validação de entidade e ownership permanece no banco.
 export const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

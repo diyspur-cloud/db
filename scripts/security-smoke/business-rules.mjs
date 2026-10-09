@@ -72,6 +72,12 @@ const migration = await readFile(
 );
 await db.exec(migration);
 console.log("PASS: follow-up migration applies to PostgreSQL WASM");
+const partialQuizMigration = await readFile(
+  resolve(repoRoot, "supabase/migrations/20261009170651_allow_partial_quiz_answers.sql"),
+  "utf8",
+);
+await db.exec(partialQuizMigration);
+console.log("PASS: partial quiz migration applies to PostgreSQL WASM");
 
 const publicRpcNames = [
   "award_xp", "cast_book_poll_vote", "consume_quiz_rate_limit",
@@ -116,6 +122,7 @@ const ids = {
   issue: "50000000-0000-4000-8000-000000000001",
   plan: "60000000-0000-4000-8000-000000000001",
   request: "70000000-0000-4000-8000-000000000001",
+  partialRequest: "70000000-0000-4000-8000-000000000002",
 };
 await db.query("INSERT INTO public.profiles(id) VALUES ($1),($2)", [ids.user1, ids.user2]);
 await db.query("INSERT INTO public.books(id,title) VALUES ($1,'Across seasons'),($2,'Second book')", [ids.book1, ids.book2]);
@@ -215,6 +222,28 @@ recorded = await db.query("SELECT * FROM public.record_quiz_attempt($1,$2,$3,0,1
 assert.equal(recorded.rows[0].duplicate, true);
 assert.equal(recorded.rows[0].attempt_id, recordedId);
 assert.equal((await db.query("SELECT count(*)::int AS n FROM public.quiz_answers WHERE attempt_id=$1", [recordedId])).rows[0].n, 1);
+const partialPayload = [{question_id:ids.question,chosen_idx:-1,is_correct:false}];
+const partial = await db.query(
+  "SELECT * FROM public.record_quiz_attempt($1,$2,$3,0,1,$4::jsonb)",
+  [ids.user1, ids.chapter1, ids.partialRequest, JSON.stringify(partialPayload)],
+);
+assert.equal(partial.rows[0].score, 0);
+assert.equal((await db.query("SELECT chosen_idx FROM public.quiz_answers WHERE attempt_id=$1", [partial.rows[0].attempt_id])).rows[0].chosen_idx, -1);
+const partialRetry = await db.query(
+  "SELECT * FROM public.record_quiz_attempt($1,$2,$3,1,1,$4::jsonb)",
+  [ids.user1, ids.chapter1, ids.partialRequest, JSON.stringify(partialPayload)],
+);
+assert.equal(partialRetry.rows[0].duplicate, true, "partial retry is idempotent");
+let partialConflict = false;
+try {
+  await db.query(
+    "SELECT * FROM public.record_quiz_attempt($1,$2,$3,1,1,$4::jsonb)",
+    [ids.user1, ids.chapter1, ids.partialRequest, JSON.stringify(answerPayload)],
+  );
+} catch (error) {
+  partialConflict = /22023|idempotency key conflicts/i.test(String(error));
+}
+assert.equal(partialConflict, true, "different partial retry conflicts");
 console.log("PASS: quiz averages, atomic rate limit and attempt idempotency");
 
 // Poll validation/atomic option counters.

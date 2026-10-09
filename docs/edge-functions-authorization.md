@@ -1,12 +1,12 @@
 # Contrato de autorização das Edge Functions
 
-**Estado em 2026-10-09:** há fonte versionada e estática para 11 funções; o inventário remoto retorna **0 funções implantadas**. Typecheck, lint e formatação Deno passaram. Esses resultados não equivalem a testes HTTP em Supabase hospedado. As funções devem permanecer sem deploy até a lista de secrets, autenticação externa, teste em staging e proteção do ambiente GitHub estarem prontas.
+**Estado em 2026-10-09:** há fonte versionada e estática para 11 funções; o inventário remoto confirma **11 funções `ACTIVE`**. Typecheck, lint e formatação Deno passaram para o source local. Esses resultados não equivalem a testes HTTP em Supabase hospedado nem provam que as versões hospedadas são iguais ao working tree.
 
 ## Matriz por endpoint
 
 | Função | Identidade/autorização no handler | Limites e idempotência | Gate de gateway |
 |---|---|---|---|
-| `award-xp` | JWT Supabase; fonte e `ref_id` validados contra atividade do próprio usuário; valores de XP são constantes server-side. Chama `award_xp` via service-role somente depois da verificação. | Índice parcial impede XP duplicado por usuário/source/ref. | JWT ligado (padrão). `streak_bonus` não é aceito pelo cliente. Prova evento no banco, não presença/leitura no mundo real. |
+| `award-xp` | JWT Supabase; fonte e `ref_id` validados contra atividade do próprio usuário; valores de XP são constantes server-side. Chama `award_xp` via service-role somente depois da verificação. A referência do seed usa a forma UUID canônica 8-4-4-4-12. | Índice parcial impede XP duplicado por usuário/source/ref; `streak_bonus` usa RPC diária e é idempotente. | JWT ligado (padrão). Prova evento no banco, não presença/leitura no mundo real. |
 | `vote-next-book` | JWT; ignora UUID de usuário do body; valida poll aberto e opção pertencente por RPC/transação. | Uma linha por leitor/enquete; escrita atômica. | JWT ligado (padrão). |
 | `scheduled-reminders` | Só header `x-scheduled-reminders-secret`, comparação em tempo constante; serviço lista meetings/RSVP e chama RPC de entrega. | Unique/idempotência por user/meeting/window em ledger privado. | **`verify_jwt=false` intencional**: não há JWT de usuário; segredo de serviço é validado no handler antes do cliente privilegiado. |
 | `ai-recommendations` | JWT; calcula snapshot apenas para `sub` validado; não aceita dono arbitrário do body. | Limites de payload/resultados e controle de erro do provider; configurar budget/rate limit de provedor. | JWT ligado (padrão). |
@@ -15,7 +15,7 @@
 | `newsletter-dispatch` | JWT mais papel `admin` consultado em fonte confiável; somente edição existente, audiencia permitida, subscriber `confirmed` e sem unsubscribe. | Claim/lease por issue/audience; log por recipient; retry ignora entrega `sent` preexistente. | JWT ligado (padrão). |
 | `stripe-webhook` | Assinatura Stripe sobre corpo bruto via `stripe-signature` e `STRIPE_WEBHOOK_SECRET`; metadados/user IDs validados. RPC privilegiada transacional registra event id e atualiza subscription. | Event id único/replay idempotente; erro transitório retorna 5xx para retry Stripe. | **`verify_jwt=false` intencional**: o chamador é Stripe, não usuário; assinatura do webhook é a autenticação. Não aceitar HTTP sem assinatura válida. |
 | `social-render-card` | JWT; se `user_id` veio no body, precisa casar com `sub`; kind/payload aceitos, texto limitado/escapado, Storage path com owner. | No máximo 10 jobs/dia por usuário; output SVG sanitizado e tamanho limitado. | JWT ligado (padrão). |
-| `quiz-validate` | JWT; deriva usuário de `sub`, valida capítulo publicado, payload/answers e chave idempotente; não confia em user_id do cliente. | Rate limit atômico por user/chapter; uma tentativa por request id; XP só pela RPC protegida. | JWT ligado (padrão). |
+| `quiz-validate` | JWT; deriva usuário de `sub`, valida capítulo publicado, payload/answers e chave idempotente; não confia em user_id do cliente. Array vazio/parcial é normalizado para respostas `chosen_idx=-1`; score e gabarito continuam server-side. | Rate limit atômico por user/chapter; uma tentativa por request id; XP só pela RPC protegida. | JWT ligado (padrão). |
 | `generate-book-embeddings` | JWT mais papel `admin`; service-role restrito ao handler; processa só livros sem embedding. | Page size 1–20; output de dimensão 1536; atualiza condicionalmente só embeddings ainda nulos. | JWT ligado (padrão). |
 
 ## Helper e privilégios compartilhados
@@ -27,7 +27,11 @@
 - consulta de papel Admin na tabela `profiles` pelo cliente de serviço;
 - responses JSON/CORS compartilhadas e comparação de segredo em tempo constante.
 
-O cliente privilegiado não é aceito como substituto para autorização: handlers checam token, ownership, papel ou autenticação de serviço antes de usá-lo. A lista de funções permanece vazia no remote; não houve alteração de secrets nem deploy na execução documentada.
+`_shared/supabaseAdmin.ts` reexporta o mesmo `serviceClient`, e `_shared/types.ts`
+contém somente tipos de resposta compartilhados; não há um segundo cliente
+privilegiado nem tipos paralelos do banco.
+
+O cliente privilegiado não é aceito como substituto para autorização: handlers checam token, ownership, papel ou autenticação de serviço antes de usá-lo. O inventário remoto foi consultado read-only e não houve alteração de secrets nem redeploy na execução documentada.
 
 ## Overrides de `verify_jwt`
 
@@ -51,7 +55,7 @@ Os valores devem ser guardados por Secrets do Supabase/GitHub Actions, jamais no
 - **Executado:** Deno `check`, `lint`, `fmt:check` nas 11 funções; PGlite cobre RPCs de quiz, XP, votes, reminders, newsletter, Stripe e matching.
 - **Executado:** check/lint/format do harness `scripts/integration-smoke/`.
 - **Não executado:** invocar os handlers via `supabase functions serve`, Auth real, webhook Stripe em sandbox, Resend/OpenAI, armazenamento ou WebSocket em projeto isolado.
-- **Não executado:** deploy; não há funções hospedadas para testar/monitorar.
+- **Não executado:** redeploy do working tree, monitoramento de logs e aceitação de efeitos de negócio; há funções hospedadas, mas a versão local ainda não foi publicada nesta execução.
 
 Para testes ao vivo use projeto/branch descartável, `SUPABASE_TEST_PROJECT_REF` e secrets exclusivos de staging. O harness recusa o ref de produção. A branch foi recusada pelo usuário por custo recorrente de US$ 0,01344/h; por isso a execução é uma pendência, não um teste “bloqueado e aprovado”.
 

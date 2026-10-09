@@ -6,8 +6,9 @@ function requiredEnv(name: string): string {
   if (!value) throw new Error(`missing_required_env:${name}`);
   return value;
 }
+
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
@@ -148,7 +149,7 @@ Deno.serve(async (req) => {
       "stripe-webhook: event processing failed",
       error instanceof Error ? error.message : "unknown",
     );
-    // Retorne 5xx para que o Stripe repita; o RPC grava o evento somente junto com a assinatura.
+    // Retorna 5xx para que o Stripe repita; o RPC grava o evento junto com a assinatura.
     return new Response("event processing failed", { status: 500 });
   }
 });
