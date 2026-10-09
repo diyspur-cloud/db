@@ -147,3 +147,56 @@ $$;
 commit;
 
 select 'PASS: SDD community replay contract' as result;
+
+-- Publication visibility contract: app queries are not the security boundary.
+-- Exercise only the final catalog definitions; this test creates no fixtures.
+begin;
+
+do $$
+declare
+  chapter_policy text;
+  quiz_policy text;
+  meeting_policy text;
+  comments_helper text;
+begin
+  select lower(qual) into chapter_policy
+    from pg_policies
+   where schemaname = 'public' and tablename = 'chapters'
+     and policyname = 'chapters_read';
+  if chapter_policy is null
+     or position('published_at' in chapter_policy) = 0
+     or position('statement_timestamp' in chapter_policy) = 0
+     or position('finished' in chapter_policy) = 0 then
+    raise exception 'Publication contract failed: chapter read policy does not filter future timestamps and inactive seasons';
+  end if;
+
+  select lower(qual) into quiz_policy
+    from pg_policies
+   where schemaname = 'public' and tablename = 'quiz_questions'
+     and policyname = 'quiz_q_read_auth';
+  if quiz_policy is null
+     or position('published_at' in quiz_policy) = 0
+     or position('active' in quiz_policy) = 0 then
+    raise exception 'Publication contract failed: quiz question policy does not restrict unpublished chapters/seasons';
+  end if;
+
+  select lower(qual) into meeting_policy
+    from pg_policies
+   where schemaname = 'public' and tablename = 'meetings'
+     and policyname = 'meetings_read';
+  if meeting_policy is null
+     or position('published_at' in meeting_policy) = 0 then
+    raise exception 'Publication contract failed: meeting policy does not restrict future chapter links';
+  end if;
+
+  comments_helper := lower(pg_get_functiondef('private.get_visible_comments()'::regprocedure));
+  if position('published_at' in comments_helper) = 0
+     or position('statement_timestamp' in comments_helper) = 0 then
+    raise exception 'Publication contract failed: visible comments helper does not filter future chapters';
+  end if;
+end;
+$$;
+
+commit;
+
+select 'PASS: publication visibility contract' as result;
