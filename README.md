@@ -31,7 +31,7 @@ Repositório do backend do DIYSPUR: schema PostgreSQL, migrations, RLS, views, R
 
 O schema contém as tabelas e contratos usados pelo ciclo de leitura atual, incluindo catálogo, capítulos, quizzes, progresso, comentários, encontros, enquetes, host prompts, listas, desafios, clubes, XP, achievements, notificações, preferências, conteúdo sensível e integrações de provider.
 
-A árvore versionada possui **75 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
+A árvore versionada possui **77 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
 
 - proteção de conteúdo futuro e correção de recursão RLS;
 - gate de capítulo e RPCs de acesso mínimo;
@@ -405,3 +405,55 @@ Pare. Compare o SQL efetivo, o histórico remoto e o clone. Registre a correspon
 ## Contribuição
 
 Use branches e commits pequenos. Toda alteração de schema deve incluir migration incremental, revisão de RLS e atualização do contrato consumidor. Toda alteração de Edge Function deve incluir autorização esperada, secrets necessários, comportamento de retry/idempotência e procedimento de deploy. Nunca commite secrets, dumps com PII ou credenciais de usuários.
+
+## Release editorial full-stack — 2026-10-10
+
+A migration `20261010120000_editorial_product_lifecycle.sql` foi aplicada com sucesso no projeto Supabase `xjhehhfhhoomblcggjpk`. O registro remoto usa a versão `20261010030848` e o nome `editorial_product_lifecycle`; essa diferença de timestamp ocorre porque o gateway remoto registra o momento do apply, enquanto o arquivo versionado preserva o timestamp de autoria.
+
+### O que foi aplicado
+
+| Domínio | Alterações remotas |
+|---|---|
+| Clubes | `user_clubs.version`, `user_clubs.archived_at`, convites, constraints de nome/descrição/role, RPCs de criação/edição/entrada/saída e policies de leitura autorizada |
+| Diário | `reading_journal_entries.version`, `shared_club_id`, constraints de páginas/minutos e policy que impede exposição de club entries sem vínculo |
+| Listas | `reading_lists.version`, constraint de posição não negativa e RPC transacional `reorder_reading_list` |
+
+Todas as funções públicas novas são wrappers `SECURITY INVOKER`; a autorização sensível fica em funções `private` `SECURITY DEFINER` com `search_path` vazio e grants explícitos. A identidade sempre vem de `auth.uid()`. A tabela de convites aceita leitura somente pelo convidado ou pelo emissor; a emissão/aceite de convite ainda requer uma jornada dedicada antes de ser exposta no frontend.
+
+### Operação segura da migration
+
+A migration é aditiva e idempotente em colunas, constraints, policies e funções. Não edita migrations históricas, não cria usuários, não insere conteúdo editorial e não contém secrets. Em um ambiente novo, o replay deve respeitar a ordem dos arquivos do diretório `supabase/migrations` e os seeds versionados. Em produção, nunca use `supabase db reset --linked` para corrigir drift.
+
+Procedimento recomendado para a próxima alteração:
+
+```bash
+# no clone do backend
+git checkout main
+git pull --ff-only origin main
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+
+# depois do apply, no clone do frontend
+supabase gen types typescript --project-id "$SUPABASE_PROJECT_REF" > ../app/src/types/database.ts
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+O comando `db push` deve ser executado somente depois da comparação do histórico remoto e de um replay em staging. O apply desta release foi feito pelo gateway autorizado e confirmado em `list_migrations`.
+
+### Auditoria pós-release
+
+A auditoria Supabase pós-apply encontrou advisories. Os avisos de segurança incluem seis extensions instaladas em `public`, as funções legadas `public.get_chapter_access` e `public.get_season_chapter_access` executáveis por anon/authenticated como `SECURITY DEFINER`, e a proteção de senha vazada do Supabase Auth desabilitada. Os avisos de performance incluem FKs novas sem índices cobridores (`shared_club_id`, `invited_by`, `invited_user_id`), recomendações de init plan para duas policies novas e uma lista de índices historicamente não utilizados.
+
+Esses advisories foram registrados, não ocultados e não foram tratados com uma migration improvisada após o deploy. O próximo hardening deve avaliar cada função/policy contra consumidores existentes, habilitar leaked password protection no Auth e adicionar índices cobridores em migration separada, medindo antes e depois.
+
+### Testes de autorização obrigatórios
+
+Para cada mudança de policy/RPC, execute a matriz anon, usuário titular, usuário de outro registro, membro de clube privado, convidado, moderator e admin. Verifique especialmente: um usuário não consegue ler memberships de clube privado; um owner não consegue sair sem arquivar; uma entrada de diário privada não aparece no feed; um `shared_club_id` inexistente não abre conteúdo; e uma ordem de lista incompleta ou com item de outra lista falha de forma atômica.
+
+### Relação com o Vercel
+
+O backend não é aplicado pelo Vercel. O repositório `diyspur-cloud/app` consome o projeto Supabase por SSR/browser e o projeto Vercel `diyspur` é acionado pelo push em `main`. A ordem de release é: migration e confirmação remota; geração do contrato TypeScript; testes do frontend; push de `main`; build/deploy automático Vercel; smoke test das rotas públicas e dos fluxos autenticados.
