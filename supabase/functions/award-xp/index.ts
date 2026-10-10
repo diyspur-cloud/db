@@ -2,7 +2,6 @@ import { json, requestUser, serviceClient, UUID_RE } from "../_shared/auth.ts";
 import { cors } from "../_shared/cors.ts";
 
 const XP = {
-  join_meeting: 10,
   finish_chapter: 20,
   comment: 30,
   quiz_answer: 50,
@@ -79,13 +78,6 @@ Deno.serve(async (req) => {
     } else if (source === "comment") {
       const { data, error } = await service.from("comments").select("id")
         .eq("id", ref_id).eq("user_id", user.id).is("deleted_at", null)
-        .maybeSingle();
-      verified = !error && !!data;
-    } else if (source === "join_meeting") {
-      const { data, error } = await service.from("meeting_rsvps").select(
-        "meeting_id",
-      )
-        .eq("meeting_id", ref_id).eq("user_id", user.id).eq("attending", true)
         .maybeSingle();
       verified = !error && !!data;
     } else if (source === "finish_book") {
