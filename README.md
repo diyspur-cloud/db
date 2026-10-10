@@ -460,7 +460,7 @@ O backend não é aplicado pelo Vercel. O repositório `diyspur-cloud/app` conso
 
 ## Release de hardening da auditoria — 2026-10-10
 
-A branch `fix/auditoria-20261010` contém as correções de banco e Edge Function dos achados A01, A02, A03, A39, A40, A41 e A42.
+A release foi integrada à `main` pelo PR #5 e contém as correções de banco e Edge Function dos achados A01, A02, A03, A39, A40, A41 e A42.
 
 ### Migrations desta release
 
@@ -492,4 +492,4 @@ Confirme no histórico remoto as duas migrations, a existência das RPCs novas e
 
 ### Estado da release
 
-Migrations e Edge Function estão versionadas na branch de hardening; o frontend atualiza o contrato TypeScript e seus consumidores. Typecheck, lint, 13 testes unitários e build foram aprovados. Após aplicação remota, registre aqui timestamp do schema, deployment Vercel, rotas verificadas e matriz de identidades.
+As migrations foram aplicadas no projeto `xjhehhfhhoomblcggjpk` nas versões remotas `20261010165108` e `20261010165112`. A Edge Function `quiz-validate` está ativa na versão 9 com JWT obrigatório. O frontend correspondente está em produção no Vercel no commit `7d0f824c9118d35e1cd154987447929079258915`. Typecheck, lint, 13 testes unitários, build e smoke público de navegador foram aprovados; os fluxos autenticados exigem uma conta QA autorizada para o aceite final.
