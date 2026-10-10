@@ -1,296 +1,407 @@
-# DIYSPUR — backend Supabase do clube de leitura
+# DIYSPUR — backend Supabase
 
-Repositório do backend do DIYSPUR: schema PostgreSQL, migrations, RLS, Supabase Edge Functions, contratos de API, adapters de acesso a dados e harnesses de teste. A especificação original do produto está em [`SDDBD2.md`](./SDDBD2.md). O SDD de execução vinculante foi compartilhado no workspace do projeto (não faz parte deste clone); seus resultados e limites estão sintetizados no relatório versionado [`docs/execution/SDD-EXECUTION-20261009.md`](./docs/execution/SDD-EXECUTION-20261009.md).
+Repositório do backend do DIYSPUR: schema PostgreSQL, migrations, RLS, views, RPCs, seeds, Edge Functions e contratos consumidos pelo frontend.
 
-> **Status em 09/10/2026:** os itens de implementação local cobertos nesta rodada foram codificados e passaram pelos testes indicados abaixo. **O SDD não está integralmente aceito.** Permanecem gates que dependem de Docker, staging com usuários reais, providers e dados externos, validação de efeitos de negócio, reconciliação do histórico e capacidades operacionais. O código local desta rodada não foi aplicado ao Supabase nem redeployado.
+- **Repositório:** <https://github.com/diyspur-cloud/db>
+- **Frontend:** <https://github.com/diyspur-cloud/app>
+- **Produção:** <https://diyspur.vercel.app/>
+- **Projeto Supabase configurado:** `xjhehhfhhoomblcggjpk`
+- **Schema funcional:** `public`, com helpers e projeções privadas quando necessário.
+
+> Este repositório é a fonte de verdade do banco e das funções backend. Não coloque secrets no SQL, nas migrations, nos seeds ou no frontend. O frontend usa somente a chave publishable; credenciais administrativas permanecem no Supabase/ambiente de deploy.
 
 ## Índice
 
-1. [Escopo e estado de conclusão](#1-escopo-e-estado-de-conclusão)
-2. [Arquitetura e segurança](#2-arquitetura-e-segurança)
-3. [O que foi implementado nesta rodada](#3-o-que-foi-implementado-nesta-rodada)
-4. [Matriz de validação do SDD](#4-matriz-de-validação-do-sdd)
-5. [Migrations e relação com o Supabase remoto](#5-migrations-e-relação-com-o-supabase-remoto)
-6. [Edge Functions](#6-edge-functions)
-7. [Adapters e contratos de aplicação](#7-adapters-e-contratos-de-aplicação)
-8. [Seeds e replay local](#8-seeds-e-replay-local)
-9. [Como testar](#9-como-testar)
-10. [Deploy e configuração externa](#10-deploy-e-configuração-externa)
-11. [Pendências, limites e decisões preservadas](#11-pendências-limites-e-decisões-preservadas)
-12. [Mapa de documentação](#12-mapa-de-documentação)
+- [Estado atual](#estado-atual)
+- [Arquitetura](#arquitetura)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [Domínios e contratos](#domínios-e-contratos)
+- [RLS e segurança](#rls-e-segurança)
+- [Migrations e seeds](#migrations-e-seeds)
+- [Edge Functions](#edge-functions)
+- [Configuração local](#configuração-local)
+- [Testes e validação](#testes-e-validação)
+- [Aplicação controlada no Supabase](#aplicação-controlada-no-supabase)
+- [Deploy de Edge Functions](#deploy-de-edge-functions)
+- [Relação com o frontend](#relação-com-o-frontend)
+- [Operação e troubleshooting](#operação-e-troubleshooting)
+- [Limites e pendências externas](#limites-e-pendências-externas)
 
-## 1. Escopo e estado de conclusão
+## Estado atual
 
-| Recurso | Referência |
-|---|---|
-| Repositório | [github.com/diyspur-cloud/db](https://github.com/diyspur-cloud/db) |
-| Projeto Supabase consultado | `xjhehhfhhoomblcggjpk` |
-| Endpoint Supabase | `https://xjhehhfhhoomblcggjpk.supabase.co` |
-| Schema original | [`SDDBD2.md`](./SDDBD2.md) |
-| Relatório do SDD | [`docs/execution/SDD-EXECUTION-20261009.md`](./docs/execution/SDD-EXECUTION-20261009.md) |
-| OpenAPI | [`docs/openapi.yaml`](./docs/openapi.yaml) |
-| Status de execução | [`docs/execution/SDD-EXECUTION-20261009.md`](./docs/execution/SDD-EXECUTION-20261009.md) |
+O schema contém as tabelas e contratos usados pelo ciclo de leitura atual, incluindo catálogo, capítulos, quizzes, progresso, comentários, encontros, enquetes, host prompts, listas, desafios, clubes, XP, achievements, notificações, preferências, conteúdo sensível e integrações de provider.
 
-A execução atual fez mudanças no repositório e consultas remotas **read-only** para reconciliação. No momento da consulta, o catálogo remoto continha 51 versões de migration e 11 Edge Functions `ACTIVE`. Isso não demonstra que o source local seja igual às versões hospedadas.
+A árvore versionada possui **75 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
 
-### Estados usados neste README
+- proteção de conteúdo futuro e correção de recursão RLS;
+- gate de capítulo e RPCs de acesso mínimo;
+- conteúdo MVP de Verity, quiz e prompt do anfitrião;
+- semântica correta de conclusão parcial de livro;
+- votação encerrada e resultados agregados;
+- fonte de XP para achievements e evaluator idempotente;
+- avisos de conteúdo de Verity;
+- desafio anual de 12 livros em 12 meses.
 
-- **Implementado em arquivos:** o código, migration ou documento está no working tree.
-- **Testado localmente:** um teste reproduzível desta rodada cobre o comportamento, com o limite do harness declarado.
-- **Aplicado no remoto:** migration ou função foi enviada ao projeto Supabase e há evidência de catálogo/execução.
-- **Aceito end-to-end:** o fluxo foi executado no ambiente correspondente com identidade, dados e efeitos verificados.
+O projeto remoto utilizado pela aplicação já recebeu as migrations funcionais desta rodada. Ainda assim, qualquer ambiente novo deve ser criado por replay ordenado das migrations e seeds; não copie estado manualmente.
 
-Esses estados são diferentes. Em particular, uma função `ACTIVE`, o parse de SQL ou um teste PGlite não equivalem a aceite end-to-end.
-
-## 2. Arquitetura e segurança
+## Arquitetura
 
 ```text
-Aplicação consumidora (não há aplicação Next completa neste repositório)
-  ├─ Supabase Auth → sessão/JWT
-  ├─ Data API → grants mínimos + RLS + views security_invoker
-  ├─ Storage → policy de ownership/visibilidade + URL assinada
+Frontend Next.js / outros consumidores
+  ├─ Supabase Auth → JWT e sessão
+  ├─ Data API → grants mínimos + RLS + views autorizadas
+  ├─ Storage → ownership, visibilidade e URLs assinadas
   └─ Edge Functions → JWT, segredo interno ou assinatura de webhook
-                       └─ RPCs transacionais/privadas
-PostgreSQL
-  ├─ public: tabelas e API/views autorizadas
-  ├─ private: projeções, helpers e mecanismos internos
-  ├─ triggers: XP, contadores, metas e manutenção de estado
-  └─ pg_cron/Vault/pg_net: tarefas agendadas existentes
+                              │
+                              ▼
+PostgreSQL Supabase
+  ├─ public: tabelas, views e RPCs expostos pelo contrato
+  ├─ private: helpers, projeções e funções internas
+  ├─ triggers: progresso, XP, contadores e manutenção
+  ├─ pg_cron/pg_net/Vault: tarefas e secrets quando habilitados
+  └─ extensões: UUID, arrays, full text/vector conforme ambiente
 ```
 
-Princípios que devem ser mantidos:
+Princípios obrigatórios:
 
-- Nunca usar a chave publishable como credencial administrativa; nunca colocar `service_role` ou secrets de provider no cliente ou no Git.
-- Derivar a identidade do JWT validado, não de `user_id` informado pelo browser.
-- Não calcular score de quiz, XP, papel de admin ou contadores no cliente.
-- Manter RLS, grants de coluna e policies de ownership. Views de leitura pública devem usar `security_invoker` quando o contrato exigir.
-- Preservar Storage privado e assinar URLs temporárias após autorização; não converter path privado em URL pública.
-- Não editar migrations já aplicadas para aparentar que o remoto mudou. Criar correção incremental e reconciliar antes de qualquer push ao banco.
-- Proteger payloads de spoiler, conteúdo de comentário, PII, resposta correta de quiz e estado administrativo.
+1. A identidade vem de `auth.uid()`/claims validadas, nunca de `user_id` confiado pelo browser.
+2. RLS continua habilitado em toda tabela que contém dados de usuário, conteúdo protegido ou escopo de clube.
+3. Score de quiz, gabarito, XP, achievement, papel administrativo e conclusão são calculados no servidor.
+4. Views públicas devem selecionar somente campos públicos e respeitar a política de visibilidade.
+5. Helpers privados devem evitar recursão de policy; não crie policy que consulte a mesma tabela de maneira recursiva.
+6. Migrations aplicadas são imutáveis: toda correção posterior recebe novo timestamp/arquivo.
+7. Secrets de provider ficam no Supabase Vault/Edge Function settings, nunca em `seed.sql`, logs ou commits.
 
-## 3. O que foi implementado nesta rodada
+## Estrutura do repositório
 
-### Banco e migrations locais
+```text
+supabase/
+├── config.toml             # projeto local, Auth, API, DB, Storage e seed
+├── migrations/             # DDL, policies, funções, views e dados incrementais
+├── functions/              # Edge Functions Deno
+├── seed.sql                # seed principal ordenado
+├── seed_complement.sql     # conteúdo complementar/editorial
+└── security-audit.sql      # consultas auxiliares de auditoria
 
-Foram criadas cinco migrations incrementais locais:
+docs/
+├── openapi.yaml
+├── supabase-reference.md
+├── edge-functions-authorization.md
+├── deployment-status.md
+├── implementation-blockers.md
+├── verity-edition-sources.md
+└── execution/              # reconciliação e evidências de execução
 
-| Migration | Intenção |
-|---|---|
-| `20261009170633_align_community_stats_snapshot.sql` | Recriar snapshot de estatísticas e aliases públicos protegidos. |
-| `20261009170637_align_user_reading_overview_contract.sql` | Alinhar o overview à contagem literal por capítulos, separando agregação do diário. |
-| `20261009170642_align_reading_goal_calculation.sql` | Ajustar o cálculo anual no helper privado de metas. |
-| `20261009170647_align_reading_snapshot_keys.sql` | Emitir as chaves `title`, `moods`, `pace`, `rating`, `review`. |
-| `20261009170651_allow_partial_quiz_answers.sql` | Permitir `chosen_idx = -1` e manter validação transacional/server-side. |
+scripts/
+├── deploy-edge-functions.sh
+├── replay-local.sh
+├── replay-local.mjs
+├── replay-local.bootstrap.sql
+├── replay-local.overlay.sql
+├── replay-local.seed-check.sql
+├── build-remote-bundles.py
+└── probe-sdd-remote.py
 
-Elas passaram pelo parser SQL; contratos de stats/snapshot também passam pelo replay reduzido; a migração de quiz parcial foi aplicada no smoke PGlite e testada com resposta ausente, retry e conflito. Isso **não substitui replay full** nem significa que essas migrations estejam aplicadas ao Supabase.
+SDDBD2.md                   # especificação original do produto
+TODO.md                     # pendências técnicas e de produto
+plan.md                     # plano de implementação
+```
 
-### Edge Functions e backend compartilhado
+## Domínios e contratos
 
-- `_shared/auth.ts`: UUID canônica 8-4-4-4-12 aceita o ID do seed sem validar versão/variante RFC; teste unitário cobre positivo e entradas malformadas.
-- `quiz-validate`: aceita respostas parciais, normaliza ausentes para `-1`, calcula score no servidor e mantém chave de idempotência.
-- `scheduled-reminders`: tamanho de página reduzido a 500 para ficar abaixo do `max_rows=1000` configurado.
-- `stripe-webhook`: valida UUID local também no contrato de seed.
-- `_shared/supabaseAdmin.ts` e `_shared/types.ts`: compatibilidade estrutural por reexport/tipo; não criam um segundo cliente privilegiado.
+### Catálogo e editorial
 
-### Adapters e consumidor parcial
+- `books`, `authors`, `seasons`, `chapters`;
+- metadados de edição e classificação;
+- `content_warnings` e associações editoriais;
+- visibilidade de temporada/capítulo e gate de quiz;
+- RPCs de acesso mínimo para listar metadados sem expor conteúdo protegido.
 
-Foram adicionados adapters em `src/lib/supabase/` para atividades, clubes, gamificação/votos, mídia, perfil, quiz, leitura, Realtime, social/matches e stats. Também existe `src/components/reading/SocialCard.tsx` para exibir o estado do job e imagem retornada.
+### Leitura e continuidade
 
-Esses arquivos são **camada de integração**, não uma aplicação web completa: o repositório não tem manifest de aplicação Next, rotas, telas de Auth, páginas para os fluxos do roadmap ou processo de build da UI. O helper Realtime provê assinatura genérica e conveniências para comentários/notificações; assinaturas e reconciliação em todas as telas ainda exigem consumidores e teste WebSocket real.
+- `user_progress` para estado/percentual/conclusão por capítulo;
+- `quiz_questions`, `quiz_attempts` e `user_quiz_averages`;
+- diário, metas e overview de leitura;
+- milestones de temporada;
+- views de histórico e leitura atual.
 
-### Contratos e documentação
+### Comunidade
 
-`docs/openapi.yaml` foi atualizado para UUID, quiz parcial, newsletter e retorno de card conforme handler. Documentos de autorização, deployment, blockers, plano e reconciliação foram atualizados para distinguir estado local, remoto e histórico.
+- comentários de capítulo e comentários temporizados;
+- views de comentários visíveis e estatísticas agregadas por trecho;
+- flags de spoiler e moderação;
+- host prompts com voto único/trocável;
+- enquetes abertas e resultados encerrados.
 
-## 4. Matriz de validação do SDD
+### Clube e eventos
 
-| Requisito/tema do SDD | Estado nesta entrega | O que falta para aceite |
-|---|---|---|
-| UUID canônica do seed (§6.1) | **Implementado e testado** no handler compartilhado. | POST autenticado em ambiente controlado com atividade real de `finish_book`. |
-| Stats comunitárias (§3.2) | **Migration local + teste de sintaxe/replay reduzido.** | Replay full, refresh antes/depois e validação remota da consistência temporal/snapshot. API pública continua view; MV permanece privada. |
-| Overview por capítulo (§3.3) | **Migration local implementada.** | Replay full e teste completo dos casos de dois capítulos, diário, DNF e temporadas em PostgreSQL real. |
-| Cálculo anual de metas (§3.4) | **Migration local implementada.** | Replay full e casos de ano anterior, timestamps nulos e edição/exclusão; aceite de negócio do significado de `books_done`. |
-| Snapshot do leitor (§3.6) | **Migration local implementada.** | Replay full, comparações de payload e efeito em embeddings/consumidores reais. |
-| Filtro de temporada de clube (§3.5) | **Decisão: manter filtro da temporada corrente**, em vez de removê-lo. Smoke PGlite já diferencia duas temporadas. | Aceite de produto para a semântica; teste multiusuário de clube privado em ambiente real. |
-| Quiz parcial (§6.2) | **Implementado e coberto** em PGlite: `-1`, idempotência e conflito. | Integração HTTP autenticada, teste de pergunta estrangeira e aceite dos limites adicionais de 50 perguntas/10 por minuto. Quiz vazio segue limitado por `total > 0`. |
-| Paginação reminders (§6.4) | **Correção local implementada** e lint/typecheck da função aprovados. | Volume >1 página e reunião/RSVP reais em staging; validar deduplicação e resultado da notificação. |
-| OAuth e sessão (§2.1) | **Pendente.** | Habilitar Google/GitHub no Supabase com credenciais do responsável e URL real; implementar fluxo de app e testar password/Magic Link/OAuth/refresh/logout. |
-| RLS/matriz A/B (§4, §9.2) | Adapters/leitura segura presentes; smoke PGlite cobre parte das policies. | Duas ou mais sessões reais, leitor/admin/anon e ownership cruzado em staging. |
-| Storage (§5) | Adapter para upload próprio e URL assinada; verificação de extra no código. | Testar upload/read/update, caminhos alheios, extra privado/público e buckets com sessão real. |
-| Realtime (§5.3) | Helper genérico com filtro, status e cleanup; tipos incluem tabelas do SDD. | Integrar em telas, exercitar INSERT/UPDATE/DELETE, reconnect e duas sessões; provar ausência de conteúdo proibido. |
-| Consumers e OpenAPI (§8) | Adapters TypeScript e contratos ajustados; typecheck temporário dos adapters passou. | Implementação da aplicação/telas, compatibilidade de produto e teste por contrato HTTP real. |
-| IA e matching (§6.5–6.7) | Handlers e adapter existem; compilações estáticas passaram. | Secret autorizado, embeddings reais dos livros, inferência controlada e comportamento/cache com sessão. |
-| Newsletter (§6.8) | Handler/contrato existentes; testes PGlite de lease/idempotência. | Remetente verificado, provider autorizado e envio controlado explicitamente aprovado; não houve envio nesta rodada. |
-| Stripe (§6.9) | Handler/RPCs cobertos por smoke SQL; chave/assinatura e mapeamento mantidos fora de código. | IDs reais `stripe_price_id`, eventos sandbox com identidade/assinatura e aceite de status/períodos. Nenhum preço foi inventado. |
-| Social card (§6.10) | Adapter e componente de estado implementados; OpenAPI descreve retorno renderizado. | UI completa, consulta/reabertura de job, validação de imagem/ownership e integração hospedada. |
-| Shared files/documentação (§6.11) | Reexports criados; afirmações obsoletas revisadas. | Deploy da fonte local e POST autenticado em ambiente seguro. |
-| Dados de conteúdo (§7.1–7.3) | Nenhuma URL ou conteúdo inventado. | URLs reais de vídeos/materiais; objetivos/prompts editoriais; resolver inconsistência do crossword com decisão de produto. |
-| Replay full e seeds (§1.1, §7.4) | Runner implementado para cópia descartável e duas cargas explícitas; seed-check criado. Replay reduzido passou. | **Pendente:** full bloqueado pela ausência de Docker. O replay temporário ainda aplica correção conhecida numa cópia do baseline; não satisfaz o critério de reset full sem overlay implícito. |
-| Reconciliação de histórico (§1.2, §9.1) | Correspondências e hashes documentados; remoto não foi alterado. | Reconciliar bundles `sdd_*`, timestamps renumerados e `20261009162640_close_sdd_backend_contract_gaps`; não executar `db push` até concluir. |
-| EXPLAIN/carga (§9.2) | Nenhuma conclusão de escala foi declarada. | Testar com volume representativo, `EXPLAIN ANALYZE`/BUFFERS. |
-| Backup/restore/monitoramento (§9.2) | Não demonstrado nesta rodada. | Verificar backup disponível, ponto restaurável, exercício de restore e alertas. |
+- `meetings`, RSVP e lembretes;
+- `user_clubs`, `user_club_members`, buddy reads e checkpoints;
+- `reading_lists`, itens e fila do leitor;
+- `challenges` e `user_challenges`;
+- policies de pertencimento e acesso privado.
 
-**Conclusão da validação:** há implementação substancial em arquivos e testes locais para itens de código definidos no SDD, mas **nem todos os itens foram implementados/aceitos**. Alguns dependem de escolha/dados/credenciais externas; outros, como aplicação/telas completas e replay full, continuam pendentes. O relatório de execução separa resultado de teste e bloqueio.
+### Gamificação
 
-## 5. Migrations e relação com o Supabase remoto
+- `xp_events`, `user_xp`, `user_streaks`;
+- achievements e `user_achievements`;
+- funções de recompensa idempotentes;
+- ranking por temporada sem expor PII.
 
-As cinco migrations desta rodada estão no working tree local e **não foram aplicadas remotamente**. A consulta read-only mais recente reportada encontrou 51 migrations: 24 históricas `sdd_*`, 26 incrementais e `20261009162640_close_sdd_backend_contract_gaps`. A árvore clonada não contém essa última versão e os timestamps/nome lógico de várias aplicações diferem entre remoto e arquivo local.
+### Integrações
 
-Antes de qualquer operação de banco remoto:
+- `affiliate_clicks` para registro mínimo de links afiliados;
+- preferências e recomendações;
+- embeddings/matching;
+- newsletter;
+- Stripe webhook;
+- renderização de social cards;
+- Storage privado e URLs assinadas quando habilitado.
 
-1. comparar migrations por SQL/manifesto/hash;
-2. identificar mudanças que já foram aplicadas sob outro timestamp;
-3. validar o replay em staging ou ambiente descartável;
-4. revisar backups e impacto;
-5. só então preparar uma operação explícita de migration.
+Os contratos TypeScript consumidos pelo frontend ficam sincronizados em `app/src/types/database.ts`; alterações no backend devem ser refletidas nesse snapshot e testadas no frontend.
 
-**Não rode** `supabase db push`, `migration repair`, `db reset --linked` ou bundles contra o projeto conectado para “sincronizar” timestamps.
+## RLS e segurança
 
-A reconciliação detalhada está em [`docs/execution/reconciliation.md`](./docs/execution/reconciliation.md); o estado/limitações em [`docs/deployment-status.md`](./docs/deployment-status.md) e [`docs/implementation-blockers.md`](./docs/implementation-blockers.md).
+Antes de criar ou alterar uma tabela:
 
-## 6. Edge Functions
+1. defina primary key, foreign keys, índices e constraints;
+2. habilite RLS;
+3. escreva policies de `select`, `insert`, `update` e `delete` separadamente;
+4. derive o usuário de `auth.uid()`;
+5. valide ownership, publicação, temporada e vínculo de clube;
+6. avalie se uma view `security_invoker` ou helper privado evita vazamento/recursão;
+7. teste anon, usuário comum, outro usuário e admin.
 
-As fontes Deno estão em `supabase/functions/` e incluem:
+Regras importantes já aplicadas no contrato atual:
 
-| Função | Autorização esperada | Uso |
-|---|---|---|
-| `quiz-validate` | JWT validado | Validar respostas e registrar tentativa/XP no servidor. |
-| `award-xp` | JWT + prova de atividade | Pontos por atividade e bônus diário elegível. |
-| `vote-next-book` | JWT validado | Voto transacional em enquete aberta. |
-| `scheduled-reminders` | Segredo interno | Processar RSVP/reuniões dentro da janela. |
-| `ai-recommendations` | JWT validado | Recomendação pessoal; depende de provedor/embedding. |
-| `ai-user-embeddings` | JWT + ownership | Gerar embedding pessoal, sujeito a limite. |
-| `match-readers` | JWT + ownership | Busca de leitores e cache pessoal. |
-| `newsletter-dispatch` | JWT + perfil admin | Envio administrativo; depende de configuração real do remetente. |
-| `stripe-webhook` | Assinatura Stripe | Aplicar eventos de assinatura/idempotência. |
-| `social-render-card` | JWT + ownership | Criar/renderizar job conforme contrato existente. |
-| `generate-book-embeddings` | Administrativa | Fonte adicional; não confundir com endpoint consumidor. |
+- capítulos futuros/não publicados não ficam disponíveis só porque o UUID é conhecido;
+- respostas corretas de quiz não são expostas ao cliente;
+- comentários com spoiler seguem visibilidade editorial;
+- listas, progresso, tentativas, metas e RSVP são escopados ao usuário;
+- resultados de prompt/enquete expõem agregados, não respostas privadas de terceiros;
+- papel `admin` não é aceito a partir de `user_metadata` editável;
+- roles de membros de clube obedecem constraints e policies de autorização;
+- função de XP e evaluator de achievements são idempotentes.
 
-O inventário remoto confirmou funções `ACTIVE`, mas **não houve redeploy do working tree desta execução**. `ACTIVE` não garante que a versão hospedada inclua as mudanças locais nem que o provider esteja funcional. Consulte [`docs/edge-functions-authorization.md`](./docs/edge-functions-authorization.md) antes de operar.
+Use `supabase/security-audit.sql` e as consultas documentadas em `docs/supabase-reference.md` para auditorias. Não registre JWT, senha, gabarito, payload privado ou secret em logs.
 
-## 7. Adapters e contratos de aplicação
+## Migrations e seeds
 
-Os adapters consultam superfícies autorizadas e devem continuar sujeitos a RLS. Não selecionam diretamente gabaritos/PII nem devem calcular campos privilegiados. Arquivos adicionados:
+### Convenções
 
-- `src/lib/supabase/profile.ts`
-- `src/lib/supabase/reading.ts`
-- `src/lib/supabase/quiz.ts`
-- `src/lib/supabase/media.ts`
-- `src/lib/supabase/realtime.ts`
-- `src/lib/supabase/clubs.ts`
-- `src/lib/supabase/stats.ts`
-- `src/lib/supabase/gamification.ts`
-- `src/lib/supabase/social.ts`
-- `src/lib/supabase/activities.ts`
-- `src/components/reading/SocialCard.tsx`
+- nome: `YYYYMMDDHHMMSS_descricao_em_snake_case.sql`;
+- migration nova corrige a anterior sem editar o arquivo já aplicado;
+- operações editoriais devem ser idempotentes (`WHERE NOT EXISTS`, `ON CONFLICT`, ou atualização por chave estável);
+- DDL e policy devem ser revisados contra o estado remoto antes de deploy;
+- fixtures de teste precisam ser claramente nomeadas e não podem abrir conteúdo futuro acidentalmente.
 
-A validação TypeScript dos adapters foi feita num diretório temporário com React, Next e dependências Supabase; não há `package.json` de aplicação no repositório. A existência desses módulos **não representa um website executável**.
+### Replay local
 
-## 8. Seeds e replay local
+O projeto usa `supabase/config.toml` com:
 
-`supabase/config.toml` define seeds locais. `scripts/replay-local.seed-check.sql` verifica os registros de seed esperados após duas cargas explícitas. O runner possui modos distintos:
+- PostgreSQL major version 17;
+- API local na porta 54321;
+- banco local na porta 54322;
+- Studio na porta 54323;
+- SMTP local na porta 54324;
+- seed habilitado com `seed.sql` e `seed_complement.sql`;
+- limite de resposta da API configurado em 1000 linhas.
 
-- `bash scripts/replay-local.sh --reduced`: PGlite/fixture simplificado; útil para contrato local, mas **não** valida todas as migrations, extensões, Auth, Storage ou serviços Supabase.
-- `bash scripts/replay-local.sh --full`: tenta executar uma stack Supabase local descartável, com migrations e dupla carga de seeds. Requer CLI Supabase, Docker acessível e recursos locais suficientes.
-
-Na execução desta rodada, o reduzido passou. O full foi invocado, mas parou porque não há daemon Docker acessível. Portanto o critério de replay total permanece aberto.
-
-## 9. Como testar
-
-Requisitos aproximados: Node 22+, Deno 2, Python 3.11+; Supabase CLI e Docker apenas para replay full. Execute a partir da raiz do clone.
+Com Docker e Supabase CLI instalados:
 
 ```bash
-# PGlite: policies, regras e migração de quiz parcial
-npm ci --prefix scripts/security-smoke
-npm test --prefix scripts/security-smoke
-
-# Sintaxe SQL de migrations, testes e seeds
-python3 -m pip install pglast PyYAML
-python3 - <<'PY'
-from pathlib import Path
-from pglast import parse_sql
-files = sorted(Path('supabase').rglob('*.sql'))
-for path in files:
-    parse_sql(path.read_text())
-print(f'{len(files)} arquivos SQL parseados')
-PY
-
-# Edge Functions + teste unitário de UUID
-deno task --config supabase/functions/deno.json check
-deno task --config supabase/functions/deno.json lint
-deno task --config supabase/functions/deno.json fmt:check
-deno task --config supabase/functions/deno.json test
-
-# Harness de integração (somente estático até configurar staging)
-deno task --config scripts/integration-smoke/deno.json check
-deno task --config scripts/integration-smoke/deno.json lint
-deno task --config scripts/integration-smoke/deno.json fmt:check
-
-# Replay reduzido / full descartável
-bash scripts/replay-local.sh --reduced
-bash scripts/replay-local.sh --full
-
-git diff --check
+supabase start
+supabase db reset
+# ou, para o harness versionado:
+./scripts/replay-local.sh
 ```
 
-**Não aponte o harness mutante para produção.** O smoke de integração exige configuração explícita e protege contra o project ref de produção; mantenha esse guard.
+O replay local é descartável. Nunca rode `db reset --linked` contra produção.
 
-### Resultados reportados para esta rodada
+### Inspeção de migration
 
-- `scripts/security-smoke`: passou, incluindo migração de quiz parcial, resposta `-1`, retry idempotente e conflito.
-- Replay reduzido: passou.
-- Parser SQL: 75/75 arquivos passaram.
-- Deno check/lint/format: passaram; 2 testes unitários de UUID passaram.
-- OpenAPI YAML: parse e assertions de UUID/quiz passaram.
-- Harness de integração: check/lint/format estáticos passaram.
-- Typecheck temporário dos adapters: passou.
-- Replay full, OAuth real, matriz RLS A/B real, Storage/Realtime hospedados, inferência externa, Stripe/Resend com efeitos de negócio e backup/restore: **não aprovados**.
+```bash
+find supabase/migrations -maxdepth 1 -name '*.sql' -print | sort
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+supabase db diff --local
+```
 
-Consulte o relatório para comandos/resultados e limites: [`docs/execution/SDD-EXECUTION-20261009.md`](./docs/execution/SDD-EXECUTION-20261009.md).
+Compare SQL, timestamps e histórico remoto antes de aplicar. Um mesmo SQL pode ter sido aplicado sob outro nome/timestamp; não use `migration repair` para esconder divergência sem reconciliação documentada.
 
-## 10. Deploy e configuração externa
+## Edge Functions
 
-Há versões remotas `ACTIVE`, porém o código local não foi redeployado nesta rodada. Deploy de Edge Functions é separado de migrations e não reconcilia o schema automaticamente. Antes de publicar, revisar código/lockfile, nome de projeto, `verify_jwt`, secrets requeridos e proteção de ambiente.
+| Função | Autorização esperada | Responsabilidade |
+|---|---|---|
+| `quiz-validate` | JWT | Valida respostas, score, tentativa e idempotência. |
+| `award-xp` | JWT + prova de atividade | Registra XP e recompensas elegíveis. |
+| `vote-next-book` | JWT | Voto transacional em enquete aberta. |
+| `scheduled-reminders` | Secret interno; `--no-verify-jwt` | Processa lembretes de encontros. |
+| `ai-recommendations` | JWT + provider | Recomendações personalizadas. |
+| `ai-user-embeddings` | JWT + ownership + provider | Embedding de preferências do leitor. |
+| `match-readers` | JWT + ownership | Matching e cache de leitores. |
+| `generate-book-embeddings` | Operacional/admin | Embeddings editoriais. |
+| `newsletter-dispatch` | JWT/admin + Resend | Disparo de newsletter quando provider está configurado. |
+| `stripe-webhook` | Assinatura Stripe; `--no-verify-jwt` | Recebe eventos de cobrança idempotentes. |
+| `social-render-card` | JWT + ownership | Cria/renderiza card social. |
 
-Nomes de configuração citados pelo código/documentação incluem `SUPABASE_URL`, chaves de sistema fornecidas pelo runtime, `SCHEDULED_REMINDERS_SECRET`, `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_SECRET_KEY` e `STRIPE_WEBHOOK_SECRET`. Não exponha valores no README, commits ou logs. O relatório não afirma inventário de secrets hospedados nesta execução.
+Secrets esperados por função devem ser configurados no ambiente da Edge Function, por exemplo `OPENAI_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STRIPE_WEBHOOK_SECRET` e `SCHEDULED_REMINDERS_SECRET`, conforme o provider. Nunca use valores reais em arquivos versionados.
 
-### Providers e dados externos pendentes
+## Configuração local
 
-- Google e GitHub OAuth precisam ser habilitados com credenciais reais e callback/redirect URL da aplicação.
-- A aplicação consumidora precisa de Site URL/redirects reais; não há domínio inventado neste repo.
-- Resend requer sender/domain autorizado antes de qualquer envio.
-- IA depende de secret e embeddings/dados reais; `ACTIVE` não prova inferência.
-- Stripe requer IDs `stripe_price_id` reais para planos; nenhum foi criado/fabricado.
-- Vídeos e materiais do seed continuam exemplos até o responsável fornecer URLs reais.
-- Não houve envio de newsletter, compra, cobrança ou pagamento.
+### Requisitos
 
-## 11. Pendências, limites e decisões preservadas
+- Supabase CLI compatível com o projeto;
+- Docker Desktop/Engine para `supabase start`;
+- Node.js para scripts auxiliares;
+- Deno ou runtime suportado pela Supabase CLI para Edge Functions;
+- acesso ao projeto Supabase somente para operações autorizadas.
 
-1. **Replay full:** requer Docker; não passou nesta execução. Além disso, o runner full mantém correção da falha 42803 em cópia temporária; isso ainda não é aceite do critério “sem overlay implícito”.
-2. **Reconciliação:** resolver o baseline remoto `sdd_*`, as versões incrementais renumeradas e `20261009162640_close_sdd_backend_contract_gaps`; não dar push ao banco antes.
-3. **Auth/app:** OAuth Google/GitHub, password/Magic Link, callback, refresh, logout e sessões reais não foram implementados/testados numa aplicação, que não existe como app buildável neste clone.
-4. **Integrações:** Resend, OpenAI e Stripe exigem configuração/identificadores reais e testes autorizados. Não inventar preços, sender, conteúdo ou resultado.
-5. **RLS/Storage/Realtime:** os testes locais não substituem staging com dois usuários, operações de Storage e WebSocket real.
-6. **Dados de produto:** metas, prompts e URLs de conteúdo precisam de valores definidos por responsáveis; crossword de exemplo tem configuração incompatível; calendário real não foi inventado.
-7. **Performance e operação:** ainda faltam EXPLAIN com carga representativa, prova de backup/restauração e monitoramento.
-8. **Requisitos incompletos do anexo:** badge/milestone automation, pontuação de todos os jogos, convite/capacidade buddy read, layout individual dos cards, Discord e Google Calendar não têm especificação suficiente para implementar sem inventar produto.
-9. **Semântica mantida:** o filtro de temporada do painel de clube foi mantido por coerência com `current_season_id`; sua eventual remoção requer decisão de produto.
-10. **Segurança:** avisos sobre extensões em `public` permanecem documentados; não foram movidas automaticamente por possível impacto em tipos, operadores e índices.
+### Login e link
 
-Para decidir se um item fica concluído, exigir implementação versionada, teste no ambiente correspondente, contrato/diferença explicitados e evidência do efeito. Não marcar o TODO inteiro como aceito somente pela existência de tabela, nome de function ou teste sintático.
+```bash
+supabase login
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+```
 
-## 12. Mapa de documentação
+Defina `SUPABASE_PROJECT_REF` apenas no shell/CI seguro:
 
-| Documento | Conteúdo |
-|---|---|
-| [`docs/execution/SDD-EXECUTION-20261009.md`](./docs/execution/SDD-EXECUTION-20261009.md) | Implementação, resultados e gates desta rodada. |
-| [`docs/deployment-status.md`](./docs/deployment-status.md) | Estado remoto/local e testes reportados. |
-| [`docs/implementation-blockers.md`](./docs/implementation-blockers.md) | Bloqueios, decisões e dependências externas. |
-| [`docs/implementation-plan.md`](./docs/implementation-plan.md) | Histórico e plano de implementação. |
-| [`docs/execution/reconciliation.md`](./docs/execution/reconciliation.md) | Correspondências de migration e limites de push. |
-| [`docs/edge-functions-authorization.md`](./docs/edge-functions-authorization.md) | Autorização por handler. |
-| [`docs/openapi.yaml`](./docs/openapi.yaml) | Contrato HTTP. |
-| [`docs/execution/supabase-sources-20261009.md`](./docs/execution/supabase-sources-20261009.md) | Referências técnicas consultadas. |
-| [`src/lib/supabase/README.md`](./src/lib/supabase/README.md) | Adapters e fronteiras de acesso de cliente. |
+```bash
+export SUPABASE_PROJECT_REF=xjhehhfhhoomblcggjpk
+```
 
-**Segredos são configuração, não documentação.** Nunca grave tokens, API keys, service-role keys, secrets de webhook ou conteúdo pessoal em README, código, evidências commitadas ou logs públicos.
+Não salve access tokens no repositório.
+
+## Testes e validação
+
+A validação deve separar quatro estados:
+
+- **implementado em arquivos:** existe no working tree;
+- **testado localmente:** há teste/replay reproduzível;
+- **aplicado remotamente:** migration/função foi enviada e há evidência;
+- **aceito end-to-end:** fluxo foi exercitado com identidade, dados e efeitos reais.
+
+Comandos úteis:
+
+```bash
+# replay/seed local
+./scripts/replay-local.sh
+
+# verificar migrations
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+
+# testes SQL/segurança do projeto
+psql "$DATABASE_URL" -f supabase/security-audit.sql
+
+# validação de Edge Functions antes do deploy
+for f in supabase/functions/*/index.ts; do
+  echo "checking $f"
+done
+```
+
+Para mudanças de autorização, valide ao menos:
+
+- anon sem sessão;
+- usuário A em seus próprios dados;
+- usuário B tentando acessar dados de A;
+- admin no caminho administrativo;
+- capítulo publicado versus futuro;
+- conteúdo realmente vazio versus erro de policy/serviço;
+- retry/idempotência de quiz, XP, RSVP e achievements.
+
+Testes no banco compartilhado podem alterar produção. Prefira projeto staging ou banco descartável e use fixtures com identificadores estáveis.
+
+## Aplicação controlada no Supabase
+
+Não aplique migrations diretamente após um simples `git push`. O procedimento recomendado é:
+
+1. revisar o diff SQL e executar `git diff --check`;
+2. identificar dependências entre migrations e funções;
+3. comparar o histórico remoto com `supabase migration list`;
+4. fazer replay em staging/ambiente descartável;
+5. revisar policies, grants, índices, triggers e views;
+6. aplicar em uma janela controlada;
+7. verificar a migration no remoto e testar Data API/RPC/Edge Function;
+8. registrar evidência em `docs/execution/`.
+
+Com Supabase CLI, o comando de aplicação deve ser executado somente após essa reconciliação:
+
+```bash
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+Não use `supabase db reset --linked`, `migration repair` ou edição de migrations aplicadas para forçar o histórico. Se o remoto e o clone divergirem, documente a reconciliação e crie uma migration corretiva.
+
+## Deploy de Edge Functions
+
+O script versionado separa funções JWT de webhooks/cron:
+
+```bash
+export SUPABASE_PROJECT_REF=xjhehhfhhoomblcggjpk
+supabase login
+./scripts/deploy-edge-functions.sh
+```
+
+Antes do deploy:
+
+- configure secrets no projeto correto;
+- valide assinatura/segredo de webhook;
+- confirme `verify_jwt` de cada função;
+- confira limites/rate limits;
+- teste payloads inválidos e retries;
+- não divulgue logs com dados privados.
+
+`ACTIVE` no painel não prova que a versão local foi publicada nem que o provider externo está funcionando; registre versão, data e smoke test.
+
+## Relação com o frontend
+
+O frontend [`diyspur-cloud/app`](https://github.com/diyspur-cloud/app) consome este backend por Supabase SSR/browser. Ao mudar o backend:
+
+1. atualize migrations e, se necessário, seeds;
+2. aplique no ambiente correto;
+3. sincronize `src/types/database.ts` no frontend;
+4. atualize queries/actions/components;
+5. execute frontend lint, typecheck, unitários, build e E2E;
+6. publique o frontend no Vercel somente depois da confirmação do contrato remoto.
+
+O deploy do Vercel não aplica migrations nem Edge Functions.
+
+## Operação e troubleshooting
+
+### `42P17 infinite recursion detected in policy`
+
+Não relaxe RLS. Localize a policy que consulta a própria tabela e mova a verificação para helper privado/RPC ou reescreva a condição sem recursão. Adicione migration corretiva e teste anon/usuário/admin.
+
+### API retorna 0 linhas
+
+Separe três casos: consulta vazia, conteúdo não publicado e erro de autorização/serviço. Verifique status HTTP, logs, policy, grants, temporada e claims antes de alterar seed.
+
+### Edge Function responde 401/403
+
+Confirme se a função exige JWT, se o token foi enviado, se a assinatura é válida e se a policy/RPC aceita o usuário. Não troque `verify_jwt` por `--no-verify-jwt` como atalho; isso é reservado a webhook/cron com autenticação própria.
+
+### Migration já aplicada com outro timestamp
+
+Pare. Compare o SQL efetivo, o histórico remoto e o clone. Registre a correspondência; não renomeie/edite o arquivo aplicado apenas para satisfazer a CLI.
+
+## Limites e pendências externas
+
+- OAuth social depende de credenciais e configuração administrativa do Supabase Auth.
+- Newsletter, IA, matching, Stripe e geração de social card dependem de providers, secrets, webhooks e aceite operacional.
+- Replay full, backup/restore, carga com volume representativo e testes multiusuário exigem ambiente dedicado; não são inferidos de parse SQL ou de uma função `ACTIVE`.
+- Conteúdo editorial deve ser revisado antes de ampliar temporadas, perguntas, avisos, enquetes ou fixtures.
+- Pagamentos, planos ou benefícios não devem ser tratados como ativos sem testar cobrança, cancelamento, entitlement e recuperação de ponta a ponta.
+
+## Documentação relacionada
+
+- [`SDDBD2.md`](./SDDBD2.md) — especificação original;
+- [`docs/openapi.yaml`](./docs/openapi.yaml) — contratos documentados;
+- [`docs/supabase-reference.md`](./docs/supabase-reference.md) — referência de tabelas/RPCs/views;
+- [`docs/edge-functions-authorization.md`](./docs/edge-functions-authorization.md) — autorização das funções;
+- [`docs/deployment-status.md`](./docs/deployment-status.md) — estado de publicação;
+- [`docs/implementation-blockers.md`](./docs/implementation-blockers.md) — bloqueios e dependências;
+- [`docs/verity-edition-sources.md`](./docs/verity-edition-sources.md) — fontes editoriais;
+- [`TODO.md`](./TODO.md) — pendências priorizadas.
+
+## Contribuição
+
+Use branches e commits pequenos. Toda alteração de schema deve incluir migration incremental, revisão de RLS e atualização do contrato consumidor. Toda alteração de Edge Function deve incluir autorização esperada, secrets necessários, comportamento de retry/idempotência e procedimento de deploy. Nunca commite secrets, dumps com PII ou credenciais de usuários.
