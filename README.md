@@ -457,3 +457,39 @@ Para cada mudança de policy/RPC, execute a matriz anon, usuário titular, usuá
 ### Relação com o Vercel
 
 O backend não é aplicado pelo Vercel. O repositório `diyspur-cloud/app` consome o projeto Supabase por SSR/browser e o projeto Vercel `diyspur` é acionado pelo push em `main`. A ordem de release é: migration e confirmação remota; geração do contrato TypeScript; testes do frontend; push de `main`; build/deploy automático Vercel; smoke test das rotas públicas e dos fluxos autenticados.
+
+## Release de hardening da auditoria — 2026-10-10
+
+A branch `fix/auditoria-20261010` contém as correções de banco e Edge Function dos achados A01, A02, A03, A39, A40, A41 e A42.
+
+### Migrations desta release
+
+- `20261011000100_harden_chapter_writes_and_comments.sql`: policies de disponibilidade, RPCs de edição/remoção própria, trigger monotônico de progresso, spoiler temporizado, metadata pública de temporada e revogação de DML direto em clubes.
+- `20261011000200_fix_reading_list_item_counts.sql`: backfill de `reading_lists.items_count` e trigger atômico para insert/update/delete/movimentação.
+
+### Regras de autorização
+
+`private.can_view_chapter` centraliza publicação e gate de quiz. Progresso, comentários e comentários temporizados só aceitam escritas em capítulos disponíveis. `auth.uid()` é a única fonte de identidade. RPCs de comentário próprio só retornam dados do autor. `get_visible_video_timed_comments` retorna `NULL` para spoilers abaixo do limiar. DML direto em clubes é revogado para `anon`/`authenticated`; as RPCs de ciclo de vida permanecem disponíveis.
+
+### Aplicação controlada
+
+```bash
+export SUPABASE_PROJECT_REF=xjhehhfhhoomblcggjpk
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+Antes do apply: revisar SQL, fazer replay em staging, reconciliar histórico remoto, revisar policies/grants/triggers, garantir ponto de restauração aprovado e executar smoke test. Não use `db reset --linked`, `migration repair` ou edição retroativa de migrations.
+
+### Edge Function `quiz-validate`
+
+A função diferencia `invalid_payload`, `incomplete_answers`, `unexpected_answers` e `invalid_quiz_configuration_or_answer`. Payload vazio/incompleto é rejeitado antes da persistência; score, gabarito, rate limit e idempotência continuam server-side.
+
+### Verificação pós-apply
+
+Confirme no histórico remoto as duas migrations, a existência das RPCs novas e teste com visitante, autor, outra conta e admin. Não registre JWT, senha, conteúdo privado ou payload completo nos logs. Se houver erro após o apply, interrompa o rollout do frontend e crie migration corretiva explícita, sem apagar o histórico.
+
+### Estado da release
+
+Migrations e Edge Function estão versionadas na branch de hardening; o frontend atualiza o contrato TypeScript e seus consumidores. Typecheck, lint, 13 testes unitários e build foram aprovados. Após aplicação remota, registre aqui timestamp do schema, deployment Vercel, rotas verificadas e matriz de identidades.
