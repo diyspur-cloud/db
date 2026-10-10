@@ -52,9 +52,12 @@ function buildDetails(
   questions: QuizQuestion[],
   answers: AnswerInput[],
 ): { normalized: AnswerInput[]; details: QuizDetail[] } | {
-  error: "unexpected_answers" | "invalid_quiz_configuration_or_answer";
+  error: "unexpected_answers" | "incomplete_answers" | "invalid_quiz_configuration_or_answer";
 } {
   const questionIds = new Set(questions.map((question) => question.id));
+  if (answers.length !== questions.length) {
+    return { error: "incomplete_answers" };
+  }
   if (answers.some((answer) => !questionIds.has(answer.question_id))) {
     return { error: "unexpected_answers" };
   }
@@ -197,6 +200,8 @@ Deno.serve(async (req) => {
         {
           error: built.error === "unexpected_answers"
             ? "unexpected_answers"
+            : built.error === "incomplete_answers"
+            ? "incomplete_answers"
             : built.error,
         },
         built.error === "unexpected_answers" ? 400 : 422,
