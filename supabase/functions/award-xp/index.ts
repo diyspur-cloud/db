@@ -89,11 +89,16 @@ Deno.serve(async (req) => {
         .maybeSingle();
       verified = !error && !!data;
     } else if (source === "finish_book") {
+      const { data: book, error: bookError } = await service.from("books")
+        .select("id,total_chapters").eq("id", ref_id).maybeSingle();
       const { data: chapters, error: chapterError } = await service.from(
         "chapters",
       )
         .select("id, seasons!inner(book_id)").eq("seasons.book_id", ref_id);
-      if (!chapterError && chapters?.length) {
+      const requiredChapters = book?.total_chapters && book.total_chapters > 0
+        ? book.total_chapters
+        : chapters?.length ?? 0;
+      if (!bookError && !chapterError && chapters?.length && chapters.length >= requiredChapters) {
         const ids = chapters.map((row) => row.id);
         const { data: progress, error: progressError } = await service.from(
           "user_progress",
@@ -103,8 +108,8 @@ Deno.serve(async (req) => {
             ids,
           );
         verified = !progressError &&
-          new Set((progress ?? []).map((row) => row.chapter_id)).size ===
-            ids.length;
+          new Set((progress ?? []).map((row) => row.chapter_id)).size >=
+            requiredChapters;
       }
     }
     if (!verified) return json({ error: "activity_not_verified" }, 403);
