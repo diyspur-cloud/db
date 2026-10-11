@@ -31,8 +31,10 @@ Repositório do backend do DIYSPUR: schema PostgreSQL, migrations, RLS, views, R
 
 O schema contém as tabelas e contratos usados pelo ciclo de leitura atual, incluindo catálogo, capítulos, quizzes, progresso, comentários, encontros, enquetes, host prompts, listas, desafios, clubes, XP, achievements, notificações, preferências, conteúdo sensível e integrações de provider.
 
-A árvore versionada possui **77 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
+A árvore versionada possui **83 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
 
+- reconciliação e integridade de produção (B01-B19): soft delete de diário e comentários, tabela de presença, proteção de desafios e capítulos em rascunho;
+- sincronização de milestones e conclusão semântica de livro;
 - proteção de conteúdo futuro e correção de recursão RLS;
 - gate de capítulo e RPCs de acesso mínimo;
 - conteúdo MVP de Verity, quiz e prompt do anfitrião;
@@ -515,8 +517,25 @@ Esta release consolida o fechamento dos gaps de auditoria e garante sincronizaç
    - Sincronização em massa de status de milestones para leitores ativos (`private.sync_user_milestone_progress`).
    - Adição idempotente de livros a listas com `private.add_book_to_reading_list` e controle de arquivamento (`reading_list_items.archived_at`).
 
+## Release de reconciliação e integridade de produção — 2026-10-11
+
+Esta release resolve integralmente os apontamentos de auditoria de produção (itens B01 a B19), corrigindo contratos de dados, soft deletes, regras de autorização RLS e desempenho.
+
+### Migration desta release
+
+- `20261011170000_audit_production_reconciliation.sql`:
+  - **B01 & B08 (Diário e Paginação):** Adição da coluna `reading_journal_entries.archived_at timestamptz`, criação do índice cobridor parcial `journal_owner_date_id_active_idx` para ordenação composta determinística `(entry_date DESC, id DESC)`, e ajuste na política RLS `journal_read_own` garantindo que entradas arquivadas não vazem para feeds ou visualizações compartilhadas.
+  - **B02, B03 & B04 (Comentários de Vídeo):** Adição de `video_timed_comments.deleted_at timestamptz`. Atualização da função `public.get_visible_video_timed_comments` para validar autorização prévia via `private.can_view_chapter` e filtrar itens soft-deleted. Revogação de `SELECT` direto na coluna `content` para forçar consumo via RPC com mascaramento de spoiler. Atualização da view `v_video_timed_comment_stats` para excluir comentários deletados.
+  - **B05 (Segurança de Desafios):** Revogação de `UPDATE` direto na tabela `public.user_challenges` para perfis autenticados. O cliente só possui concessão de `INSERT (user_id, challenge_id)` e `DELETE`, impedindo qualquer adulteração direta de `progress` ou `completed_at` (que passam a ser calculados exclusivamente no servidor).
+  - **B06 (Capítulos em Rascunho):** Adição da coluna `chapters.is_draft boolean NOT NULL DEFAULT false`. Atualização de `private.can_view_chapter` e `public.get_season_chapter_access` para rejeitar o acesso de leitores comuns a capítulos em rascunho.
+  - **B15 (Contexto de Leitura do Clube):** Suporte a `p_season_id uuid` nas variantes de `update_user_club`, atribuindo `current_season_id` e derivando `current_book_id` da temporada selecionada de forma atômica.
+  - **B17 (Presença em Encontros):** Criação da tabela `public.meeting_attendance` (`meeting_id`, `user_id`, `status`, `notes`, `created_at`, `updated_at`) com políticas RLS para consulta própria/pública e registro próprio de presença, com grants para `authenticated`.
+  - **B18 (Correção de Moderação):** Correção da função `hide_reported_content` para setar `deleted_at = now()` em `video_timed_comments` e `archived_at = now()` em `reading_journal_entries`, eliminando erro de execução por colunas inexistentes.
+  - **B19 (Índices de Chaves Estrangeiras):** Criação de índices cobridores para chaves estrangeiras sem suporte: `content_reports(reporter_id)`, `content_reports(reviewed_by)`, `editorial_audit_log(actor_id)` e `reading_journal_entries(shared_club_id)`.
+
 ### Guias de Engenharia e Agentes
 
 Para diretrizes de desenvolvimento com Claude e agentes autônomos, consulte:
 - [`CLAUDE.md`](./CLAUDE.md) — Convenções de banco, RLS, Edge Functions e fluxo de deploy.
 - [`AGENTS.md`](./AGENTS.md) — Regras de segurança, imutabilidade de migrations e invariantes de execução.
+
