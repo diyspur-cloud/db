@@ -493,3 +493,30 @@ Confirme no histórico remoto as duas migrations, a existência das RPCs novas e
 ### Estado da release
 
 As migrations foram aplicadas no projeto `xjhehhfhhoomblcggjpk` nas versões remotas `20261010165108` e `20261010165112`. A Edge Function `quiz-validate` está ativa na versão 9 com JWT obrigatório. O frontend correspondente está em produção no Vercel no commit `7d0f824c9118d35e1cd154987447929079258915`. Typecheck, lint, 13 testes unitários, build e smoke público de navegador foram aprovados; os fluxos autenticados exigem uma conta QA autorizada para o aceite final.
+
+## Release de fechamento da auditoria e sincronização — 2026-10-11
+
+Esta release consolida o fechamento dos gaps de auditoria e garante sincronização total de contratos com o frontend redesenhado no padrão Nimble.
+
+### Migrations desta release
+
+1. `20261011130000_audit_completion_and_sync.sql`:
+   - Conclusão semântica de livro com `private.is_book_complete(p_user, p_book_id)`.
+   - Atualização automática de metas de leitura anuais (`private.refresh_reading_goal_progress`) via trigger em progresso e diário.
+   - Suporte a progresso granular de desafios por prompt (`public.user_challenge_prompt_progress`) com RLS próprio.
+   - Arquivamento de entradas de diário (`reading_journal_entries.archived_at`).
+
+2. `20261011150000_audit_remaining_features.sql`:
+   - Adição de `generate_milestones_for_season` e rotinas de manutenção para temporadas ativas.
+   - Restrição de endpoints de administração e views analíticas internas.
+
+3. `20261011162000_finish_audit_gaps.sql`:
+   - Avaliação precisa e atômica de milestones (`private.milestone_is_complete` e RPC `public.get_user_milestone_status`) cobrindo capítulos lidos, intervalos de capítulos e porcentagens.
+   - Sincronização em massa de status de milestones para leitores ativos (`private.sync_user_milestone_progress`).
+   - Adição idempotente de livros a listas com `private.add_book_to_reading_list` e controle de arquivamento (`reading_list_items.archived_at`).
+
+### Guias de Engenharia e Agentes
+
+Para diretrizes de desenvolvimento com Claude e agentes autônomos, consulte:
+- [`CLAUDE.md`](./CLAUDE.md) — Convenções de banco, RLS, Edge Functions e fluxo de deploy.
+- [`AGENTS.md`](./AGENTS.md) — Regras de segurança, imutabilidade de migrations e invariantes de execução.

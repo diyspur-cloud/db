@@ -6,3 +6,4 @@ node_modules/
 dist/
 .supabase/
 *.log
+.DS_Store
