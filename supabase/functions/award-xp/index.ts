@@ -81,28 +81,11 @@ Deno.serve(async (req) => {
         .maybeSingle();
       verified = !error && !!data;
     } else if (source === "finish_book") {
-      const { data: book, error: bookError } = await service.from("books")
-        .select("id,total_chapters").eq("id", ref_id).maybeSingle();
-      const { data: chapters, error: chapterError } = await service.from(
-        "chapters",
-      )
-        .select("id, seasons!inner(book_id)").eq("seasons.book_id", ref_id);
-      const requiredChapters = book?.total_chapters && book.total_chapters > 0
-        ? book.total_chapters
-        : chapters?.length ?? 0;
-      if (!bookError && !chapterError && chapters?.length && chapters.length >= requiredChapters) {
-        const ids = chapters.map((row) => row.id);
-        const { data: progress, error: progressError } = await service.from(
-          "user_progress",
-        )
-          .select("chapter_id").eq("user_id", user.id).eq("status", "read").in(
-            "chapter_id",
-            ids,
-          );
-        verified = !progressError &&
-          new Set((progress ?? []).map((row) => row.chapter_id)).size >=
-            requiredChapters;
-      }
+      const { data: complete, error } = await service.rpc("is_book_complete", {
+        p_user: user.id,
+        p_book_id: ref_id,
+      });
+      verified = !error && complete === true;
     }
     if (!verified) return json({ error: "activity_not_verified" }, 403);
 
