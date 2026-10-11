@@ -7,6 +7,7 @@ const XP = {
   quiz_answer: 50,
   finish_book: 100,
   streak_bonus: 25,
+  meeting_attendance: 10,
 } as const;
 type Source = keyof typeof XP;
 
@@ -66,7 +67,11 @@ Deno.serve(async (req) => {
 
     const service = serviceClient();
     let verified = false;
-    if (source === "finish_chapter") {
+    if (source === "meeting_attendance") {
+      const { data, error } = await service.from("meeting_attendance").select("meeting_id")
+        .eq("user_id", user.id).eq("meeting_id", ref_id).maybeSingle();
+      verified = !error && !!data;
+    } else if (source === "finish_chapter") {
       const { data, error } = await service.from("user_progress").select("id")
         .eq("user_id", user.id).eq("chapter_id", ref_id).eq("status", "read")
         .limit(1);
