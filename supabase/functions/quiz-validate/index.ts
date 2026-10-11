@@ -52,7 +52,10 @@ function buildDetails(
   questions: QuizQuestion[],
   answers: AnswerInput[],
 ): { normalized: AnswerInput[]; details: QuizDetail[] } | {
-  error: "unexpected_answers" | "incomplete_answers" | "invalid_quiz_configuration_or_answer";
+  error:
+    | "unexpected_answers"
+    | "incomplete_answers"
+    | "invalid_quiz_configuration_or_answer";
 } {
   const questionIds = new Set(questions.map((question) => question.id));
   if (answers.length !== questions.length) {
@@ -221,7 +224,8 @@ Deno.serve(async (req) => {
     const { data: chapter, error: chapterError } = await service.from(
       "chapters",
     )
-      .select("id,season_id,number,published_at").eq("id", chapterId).maybeSingle();
+      .select("id,season_id,number,published_at").eq("id", chapterId)
+      .maybeSingle();
     if (chapterError) return json({ error: "temporarily_unavailable" }, 503);
     if (!chapter) return json({ error: "chapter_not_found" }, 404);
     if (chapter.published_at && Date.parse(chapter.published_at) > Date.now()) {
@@ -245,15 +249,20 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (previousError) return json({ error: "temporarily_unavailable" }, 503);
       if (!previous) return json({ error: "chapter_not_available" }, 403);
-      const { data: previousAttempt, error: previousAttemptError } = await service
-        .from("quiz_attempts")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("chapter_id", previous.id)
-        .limit(1)
-        .maybeSingle();
-      if (previousAttemptError) return json({ error: "temporarily_unavailable" }, 503);
-      if (!previousAttempt) return json({ error: "previous_quiz_required" }, 403);
+      const { data: previousAttempt, error: previousAttemptError } =
+        await service
+          .from("quiz_attempts")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("chapter_id", previous.id)
+          .limit(1)
+          .maybeSingle();
+      if (previousAttemptError) {
+        return json({ error: "temporarily_unavailable" }, 503);
+      }
+      if (!previousAttempt) {
+        return json({ error: "previous_quiz_required" }, 403);
+      }
     }
 
     const { data: allowed, error: rateError } = await service.rpc(
