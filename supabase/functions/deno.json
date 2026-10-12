@@ -10,6 +10,7 @@
     "strict": true
   },
   "imports": {
+    "@sentry/deno": "npm:@sentry/deno@11.6.0",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.117.2",
     "openai": "npm:openai@7.30.0",
     "resend": "npm:resend@6.32.1",

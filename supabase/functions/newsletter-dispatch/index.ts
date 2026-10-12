@@ -6,6 +6,7 @@ import {
   serviceClient,
   UUID_RE,
 } from "../_shared/auth.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 import { Resend } from "resend";
 
 function htmlEscape(value: string): string {
@@ -37,6 +38,7 @@ const NEWSLETTER_AUDIENCE = "todos_confirmados" as const;
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   let service: ReturnType<typeof serviceClient> | null = null;
   let claimedIssueId: string | null = null;
   let claimedAudienceKey: string | null = null;
@@ -255,6 +257,7 @@ Deno.serve(async (req) => {
         );
       }
     }
+    await captureFunctionException(error, "newsletter-dispatch", requestId);
     console.error(
       "newsletter-dispatch: request failed",
       error instanceof Error ? error.message : "unknown",

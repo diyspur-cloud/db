@@ -38,8 +38,9 @@
 7. **Performance:** medir tráfego antes de investigar 113 índices `unused_index` e 165 findings de policies permissivas; não remover índices de FK nem refatorar o modelo por contadores do advisor isoladamente.
 8. **Backup:** nenhum restore point manual foi criado para a rodada. Criar e validar ponto de restauração antes de futuras mudanças estruturais.
 9. **Frontend:** adapters seguros foram adicionados em `src/lib/supabase`, mas o clone continua sem aplicação/telas para executar o fluxo visual. Integração das telas e confirmação de compatibilidade do produto continuam trabalho separado.
-10. **Cron:** refresh da MV tem job `pg_cron`; não criar cron HTTP de reminders até deploy e autenticação serviço-a-serviço estarem testados.
-11. **Seeds:** sementes de exemplo permanecem locais. O preflight encontrou 0 perfis e 0 admins antes da migration; não aplicar seed demonstrativo à produção.
+10. **Observabilidade (SDD 11/10/2026):** Implementado helper compartilhado `supabase/functions/_shared/observability.ts` com `@sentry/deno@11.6.0`, correlação via `request_id`, logs estruturados e isolamento estrito contra envio de PII e segredos (Zero-PII). As 11 Edge Functions foram instrumentadas. Nenhuma função foi redeployada no remoto; a aplicação em produção permanece dependente de aprovação explícita e configuração manual de `SENTRY_DSN` e `SENTRY_ENVIRONMENT`.
+11. **Cron:** refresh da MV tem job `pg_cron`; não criar cron HTTP de reminders até deploy e autenticação serviço-a-serviço estarem testados.
+12. **Seeds:** sementes de exemplo permanecem locais. O preflight encontrou 0 perfis e 0 admins antes da migration; não aplicar seed demonstrativo à produção.
 
 ## Decisão de domínio: `user_clubs` versus `clubs`
 

@@ -388,7 +388,8 @@ await db.exec('reset role');
 const streakAfterActivity = await db.query('select current_streak,longest_streak,last_activity_at::text as last_activity_at from public.user_streaks where user_id=$1',[uid2]);
 assert.equal(streakAfterActivity.rows[0].current_streak,1);
 assert.equal(streakAfterActivity.rows[0].longest_streak,1);
-assert.equal(String(streakAfterActivity.rows[0].last_activity_at),new Date().toISOString().slice(0,10));
+const todayDb = (await db.query('select current_date::text as today')).rows[0].today;
+assert.equal(String(streakAfterActivity.rows[0].last_activity_at), todayDb);
 console.log('PASS: normal-client reactions/replies/feed counters and server-maintained streak');
 
 // The 25 XP bonus is server-only, tied to today's verified activity, and

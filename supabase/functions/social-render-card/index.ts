@@ -1,5 +1,6 @@
 import { cors } from "../_shared/cors.ts";
 import { json, requestUser, serviceClient } from "../_shared/auth.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 
 const kinds = new Set([
   "quote_card",
@@ -49,6 +50,7 @@ function renderSvg(title: string, body: string): string {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   try {
     const user = await requestUser(req);
     if (!user) return json({ error: "unauthorized" }, 401);
@@ -145,6 +147,7 @@ Deno.serve(async (req) => {
       image_url: renderedJob.image_url,
     });
   } catch (error) {
+    await captureFunctionException(error, "social-render-card", requestId);
     console.error(
       "social-render-card: request failed",
       error instanceof Error ? error.message : "unknown",
