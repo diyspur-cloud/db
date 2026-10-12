@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import { captureFunctionException } from "../_shared/observability.ts";
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);
@@ -14,6 +15,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
   }
+  const requestId = crypto.randomUUID();
   const signature = req.headers.get("stripe-signature");
   const secret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
   if (!secret) {
@@ -145,9 +147,16 @@ Deno.serve(async (req) => {
     if (error) throw error;
     return new Response(String(data ?? "ok"), { status: 200 });
   } catch (error) {
+    await captureFunctionException(error, "stripe-webhook", requestId);
     console.error(
-      "stripe-webhook: event processing failed",
-      error instanceof Error ? error.message : "unknown",
+      JSON.stringify({
+        level: "error",
+        service: "supabase-edge",
+        function: "stripe-webhook",
+        request_id: requestId,
+        code: "webhook_event_processing_failure",
+        error: error instanceof Error ? error.message : "unknown",
+      }),
     );
     // Retorna 5xx para que o Stripe repita; o RPC grava o evento junto com a assinatura.
     return new Response("event processing failed", { status: 500 });

@@ -1,5 +1,6 @@
 import { json, requestUser, serviceClient, UUID_RE } from "../_shared/auth.ts";
 import { cors } from "../_shared/cors.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 
 const XP = {
   finish_chapter: 20,
@@ -14,6 +15,7 @@ type Source = keyof typeof XP;
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   try {
     const user = await requestUser(req);
     if (!user) return json({ error: "unauthorized" }, 401);
@@ -109,9 +111,16 @@ Deno.serve(async (req) => {
     }
     return json({ ok: true, amount });
   } catch (error) {
+    await captureFunctionException(error, "award-xp", requestId);
     console.error(
-      "award-xp: request failed",
-      error instanceof Error ? error.message : "unknown",
+      JSON.stringify({
+        level: "error",
+        service: "supabase-edge",
+        function: "award-xp",
+        request_id: requestId,
+        code: "unhandled_request_failure",
+        error: error instanceof Error ? error.message : "unknown",
+      }),
     );
     return json({ error: "server_misconfigured_or_unavailable" }, 503);
   }

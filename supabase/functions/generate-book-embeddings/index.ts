@@ -1,9 +1,11 @@
 import { isAdmin, json, requestUser, serviceClient } from "../_shared/auth.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 import OpenAI from "openai";
 
 const PAGE_SIZE = 20;
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   try {
     const user = await requestUser(req);
     if (!user) return json({ error: "unauthorized" }, 401);
@@ -69,6 +71,7 @@ Deno.serve(async (req) => {
     }
     return json({ ok: true, processed, remaining: books.length === limit });
   } catch (error) {
+    await captureFunctionException(error, "generate-book-embeddings", requestId);
     console.error(
       "generate-book-embeddings: request failed",
       error instanceof Error ? error.message : "unknown",

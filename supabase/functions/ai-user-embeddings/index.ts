@@ -1,5 +1,6 @@
 import { cors } from "../_shared/cors.ts";
 import { json, requestUser, serviceClient, UUID_RE } from "../_shared/auth.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 import OpenAI from "openai";
 
 async function sha256(value: string): Promise<string> {
@@ -16,6 +17,7 @@ async function sha256(value: string): Promise<string> {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return cors();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   try {
     const user = await requestUser(req);
     if (!user) return json({ error: "unauthorized" }, 401);
@@ -38,17 +40,11 @@ Deno.serve(async (req) => {
     if (!openaiKey) return json({ error: "embeddings_unavailable" }, 503);
     const service = serviceClient();
     const { data: allowed, error: rateError } = await service.rpc(
-      "take_rate_limit",
-      {
-        p_user: user.id,
-        p_bucket: "ai-user-embeddings",
-        p_limit: 1,
-        p_window_seconds: 60 * 60,
-      },
+      "consume_embedding_rate_limit",
+      { p_user: user.id },
     );
-    if (rateError) return json({ error: "temporarily_unavailable" }, 503);
-    if (allowed !== true) {
-      return json({ error: "rate_limited", retry_after_seconds: 3600 }, 429);
+    if (rateError || !allowed) {
+      return json({ error: "rate_limited", retry_after_seconds: 300 }, 429);
     }
     const { data: snapshot, error: snapshotError } = await service.rpc(
       "build_user_reading_snapshot",
@@ -64,14 +60,15 @@ Deno.serve(async (req) => {
     const snapshotText = typeof snapshot === "string"
       ? snapshot
       : JSON.stringify(snapshot ?? []);
+    if (snapshotText.length < 3) return json({ ok: true, skipped: true });
     const openai = new OpenAI({ apiKey: openaiKey });
-    const response = await openai.embeddings.create({
+    const embedding = await openai.embeddings.create({
       model: "text-embedding-3-small",
       input: snapshotText.slice(0, 20_000),
     });
-    const vector = response.data[0]?.embedding;
+    const vector = embedding.data[0]?.embedding;
     if (!vector?.length) return json({ error: "embedding_unavailable" }, 503);
-    const { error } = await service.from("user_reading_embeddings").upsert({
+    const { error } = await service.from("user_embeddings").upsert({
       user_id: user.id,
       embedding: vector as unknown as string,
       source_hash: await sha256(snapshotText),
@@ -83,6 +80,7 @@ Deno.serve(async (req) => {
     }
     return json({ ok: true, dims: vector.length });
   } catch (error) {
+    await captureFunctionException(error, "ai-user-embeddings", requestId);
     console.error(
       "ai-user-embeddings: request failed",
       error instanceof Error ? error.message : "unknown",

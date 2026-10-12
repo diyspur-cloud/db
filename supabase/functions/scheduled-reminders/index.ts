@@ -1,7 +1,9 @@
 import { constantTimeEqual, json, serviceClient } from "../_shared/auth.ts";
+import { captureFunctionException } from "../_shared/observability.ts";
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  const requestId = crypto.randomUUID();
   const expected = Deno.env.get("SCHEDULED_REMINDERS_SECRET");
   const actual = req.headers.get("x-scheduled-reminders-secret") ?? "";
   if (!expected || !constantTimeEqual(actual, expected)) {
@@ -80,9 +82,16 @@ Deno.serve(async (req) => {
       meetings: meetings.length,
     });
   } catch (error) {
+    await captureFunctionException(error, "scheduled-reminders", requestId);
     console.error(
-      "scheduled-reminders: request failed",
-      error instanceof Error ? error.message : "unknown",
+      JSON.stringify({
+        level: "error",
+        service: "supabase-edge",
+        function: "scheduled-reminders",
+        request_id: requestId,
+        code: "unhandled_execution_failure",
+        error: error instanceof Error ? error.message : "unknown",
+      }),
     );
     return json({ error: "temporarily_unavailable" }, 503);
   }
