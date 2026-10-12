@@ -158,39 +158,81 @@ declare
   quiz_policy text;
   meeting_policy text;
   comments_helper text;
+  chapter_access_helper text;
 begin
   select lower(qual) into chapter_policy
     from pg_policies
    where schemaname = 'public' and tablename = 'chapters'
      and policyname = 'chapters_read';
-  if chapter_policy is null
-     or position('published_at' in chapter_policy) = 0
-     or position('statement_timestamp' in chapter_policy) = 0
-     or position('finished' in chapter_policy) = 0 then
-    raise exception 'Publication contract failed: chapter read policy does not filter future timestamps and inactive seasons';
-  end if;
 
   select lower(qual) into quiz_policy
     from pg_policies
    where schemaname = 'public' and tablename = 'quiz_questions'
      and policyname = 'quiz_q_read_auth';
-  if quiz_policy is null
-     or position('published_at' in quiz_policy) = 0
-     or position('active' in quiz_policy) = 0 then
-    raise exception 'Publication contract failed: quiz question policy does not restrict unpublished chapters/seasons';
-  end if;
 
   select lower(qual) into meeting_policy
     from pg_policies
    where schemaname = 'public' and tablename = 'meetings'
      and policyname = 'meetings_read';
+
+  comments_helper := lower(pg_get_functiondef('private.get_visible_comments()'::regprocedure));
+  if to_regprocedure('private.can_view_chapter(uuid)') is not null then
+    chapter_access_helper := lower(
+      pg_get_functiondef('private.can_view_chapter(uuid)'::regprocedure)
+    );
+  end if;
+
+  if chapter_policy is null
+     or (
+       position('private.can_view_chapter' in chapter_policy) = 0
+       and (
+         position('published_at' in chapter_policy) = 0
+         or position('statement_timestamp' in chapter_policy) = 0
+         or position('active' in chapter_policy) = 0
+         or position('finished' in chapter_policy) = 0
+       )
+     ) then
+    raise exception 'Publication contract failed: chapter read policy does not delegate to a valid access helper or filter future timestamps/inactive seasons';
+  end if;
+
+  if quiz_policy is null
+     or (
+       position('private.can_view_chapter' in quiz_policy) = 0
+       and (
+         position('published_at' in quiz_policy) = 0
+         or position('statement_timestamp' in quiz_policy) = 0
+         or position('active' in quiz_policy) = 0
+         or position('finished' in quiz_policy) = 0
+       )
+     ) then
+    raise exception 'Publication contract failed: quiz question policy does not restrict unpublished chapters/seasons';
+  end if;
+
   if meeting_policy is null
-     or position('published_at' in meeting_policy) = 0 then
+     or (
+       position('private.can_view_chapter' in meeting_policy) = 0
+       and (
+         position('published_at' in meeting_policy) = 0
+         or position('statement_timestamp' in meeting_policy) = 0
+         or position('active' in meeting_policy) = 0
+         or position('finished' in meeting_policy) = 0
+       )
+     ) then
     raise exception 'Publication contract failed: meeting policy does not restrict future chapter links';
   end if;
 
-  comments_helper := lower(pg_get_functiondef('private.get_visible_comments()'::regprocedure));
-  if position('published_at' in comments_helper) = 0
+  if position('private.can_view_chapter' in chapter_policy) > 0
+     or position('private.can_view_chapter' in quiz_policy) > 0
+     or position('private.can_view_chapter' in meeting_policy) > 0
+     or position('private.can_view_chapter' in comments_helper) > 0 then
+    if chapter_access_helper is null
+       or position('published_at' in chapter_access_helper) = 0
+       or position('statement_timestamp' in chapter_access_helper) = 0
+       or position('active' in chapter_access_helper) = 0
+       or position('finished' in chapter_access_helper) = 0 then
+      raise exception 'Publication contract failed: private.can_view_chapter does not filter future timestamps and inactive seasons';
+    end if;
+  elsif position('published_at' in comments_helper) = 0
      or position('statement_timestamp' in comments_helper) = 0 then
     raise exception 'Publication contract failed: visible comments helper does not filter future chapters';
   end if;

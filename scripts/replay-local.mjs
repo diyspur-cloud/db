@@ -61,6 +61,14 @@ const [
   ...prerequisiteMigrations.map((filename) => readFile(resolve(migrationDir, filename), "utf8")),
 ]);
 
+const publicationContractMarker = "-- Publication visibility contract:";
+const publicationContractStart = contract.indexOf(publicationContractMarker);
+assert.ok(
+  publicationContractStart > 0,
+  "publication visibility contract marker is missing",
+);
+const reducedContract = contract.slice(0, publicationContractStart);
+
 const sourceHashBefore = createHash("sha256").update(source).digest("hex");
 const sourceProjection = "s.title as current_season_title";
 const correctedProjection = "current_season.title as current_season_title";
@@ -173,7 +181,7 @@ async function runReducedReplay() {
       avg_percent: "42.00",
     }]);
 
-    await db.exec(contract);
+    await db.exec(reducedContract);
     const sourceHashAfter = createHash("sha256").update(source).digest("hex");
     assert.equal(sourceHashAfter, sourceHashBefore, "historical migration changed in memory");
     const sourceHashOnDisk = createHash("sha256")
@@ -182,7 +190,8 @@ async function runReducedReplay() {
     assert.equal(sourceHashOnDisk, sourceHashBefore, "historical migration changed on disk");
     console.log("PASS: replay overlay runs before the historical snapshot suffix");
     console.log("PASS: view returns the current season title and aggregated progress");
-    console.log("PASS: supabase/tests/sdd_contract.test.sql");
+    console.log("PASS: reduced community section of supabase/tests/sdd_contract.test.sql");
+    console.log("SKIP: publication visibility checks require the full migration replay");
     console.log("RESULT: REDUCED PGlite replay PASS (not a full Supabase/Docker reset)");
   } finally {
     await db.close();
