@@ -140,3 +140,15 @@ Até produzir e revisar um plano de baseline/repair isolado:
 - [Bloqueios e decisões](./implementation-blockers.md).
 - [Auditoria SQL read-only](../supabase/security-audit.sql).
 - [Documentação oficial de configuração CLI](https://supabase.com/docs/guides/local-development/cli/config).
+
+---
+
+## 9. Atualização de Auditoria de QA e UX — 2026-10-12
+
+Nesta data, foram preparadas e adicionadas as migrations de remediação de QA e UX (totalizando **85 migrations SQL** no repositório):
+
+1. **`20261012160000_add_to_up_next_atomic.sql`**: RPC atômica `public.add_to_up_next_atomic(p_book uuid)` com advisory lock consultivo transacional (`pg_advisory_xact_lock`), alocação da primeira vaga entre 1 e 5, retorno idempotente de posição já existente e erro `queue_full`.
+2. **`20261012161000_create_editorial_book.sql`**: RPC `public.create_editorial_book` (`SECURITY DEFINER`, `search_path = ''`) com verificação estrita de `public.is_admin()`, sanitização de slug/título e inserção transacional no `editorial_audit_log`.
+3. **`scripts/ops/inspect-qa-residual.sql`**: Script read-only de inspeção para identificar clubes, comentários, enquetes e perfis residuais de homologação.
+4. **Instruções de Deploy em Produção**: Consulte [`../../docs/deploy/README.md`](../../docs/deploy/README.md) para o plano completo de execução via navegador web no Supabase Dashboard e Vercel Dashboard.
+

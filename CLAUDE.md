@@ -83,6 +83,8 @@ scripts/
 
 ## 5. Principais RPCs e Contratos com o Frontend
 
+- `public.add_to_up_next_atomic(p_book uuid)`: Inserção atômica e serializada na fila de leitura do usuário autenticado (`auth.uid()`), com lock transacional consultivo, alocação de posições 1..5, retorno idempotente se o livro já estiver na fila e erro `queue_full`.
+- `public.create_editorial_book(p_title, p_slug, p_author, p_synopsis, p_cover, p_pages)`: Procedimento `SECURITY DEFINER` para cadastro editorial de livros com validação estrita de `public.is_admin()`, sanitização e auditoria transacional em `editorial_audit_log`.
 - `private.can_view_chapter(p_chapter_id uuid, p_user uuid)`: Determina se um capítulo está liberado para leitura baseado no status da temporada e no quiz do capítulo anterior.
 - `public.get_season_chapter_access(p_season_id uuid)`: Retorna a lista de capítulos de uma temporada com seus respectivos estados de bloqueio (`locked`, `unlocked`, `completed`).
 - `private.milestone_is_complete(p_user uuid, p_milestone uuid)`: Avalia o progresso do leitor contra as metas do milestone (capítulos lidos, páginas ou porcentagem).

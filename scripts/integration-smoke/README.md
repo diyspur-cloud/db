@@ -26,3 +26,11 @@ deno task --config scripts/integration-smoke/deno.json test
 O teste cria dois usuários confirmados via Admin API, autentica/renova sessões, confirma isolamento de PII e consentimento, grava e remove um objeto em `feed-media`, tenta acessos anônimos/cruzados e publica uma entrada privada temporária para verificar a entrega Realtime somente ao titular. O `finally` tenta excluir objeto, entrada, sessões e contas, inclusive em caso de asserção falhar. Revise o projeto antes de habilitar a flag; remova qualquer resíduo manualmente se uma falha de rede impedir cleanup.
 
 **Execução nesta tarefa:** check estático pode ser feito localmente, mas o teste mutante foi intencionalmente não executado. Não foi autorizada a criação de branch (custo recorrente informado de US$ 0,01344/h) e o único projeto ligado é produção; não foi seguro criar contas nem upload no banco de produção.
+
+## Higiene de Ambientes e Resíduos de Teste (QA-15)
+
+Para garantir que dados gerados durante baterias de teste e validações manuais não poluam o catálogo de produção ou métricas da comunidade:
+
+1. **Prefixação Padronizada:** Todos os registros de teste criados em ambientes compartilhados devem utilizar prefixos rastreáveis, como `[TESTE]`, `QA-` ou `qa_`.
+2. **Cleanup Automático Obrigatório:** Todo script automatizado deve conter bloco `try/finally` ou teardown garantindo a exclusão de recursos criados (arquivos em buckets, linhas criadas em tabelas relacionais).
+3. **Auditoria de Resíduos:** Periodicamente ou após rodadas de homologação, utilize o script read-only `db/scripts/ops/inspect-qa-residual.sql` para inspecionar clubes, comentários, enquetes e perfis residuais antes de qualquer consolidação analítica.

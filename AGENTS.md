@@ -50,4 +50,11 @@ Antes de concluir qualquer tarefa ou propor um commit no repositório `db`:
 - [ ] Novas foreign keys contam com índices cobridores criados explicitamente?
 - [ ] As funções `SECURITY DEFINER` utilizam `SET search_path = ''`?
 - [ ] O script de replay local ou os scripts de validação (`npm test`, `sdd_contract.test.sql`) passam sem erros?
+- [ ] Resíduos de dados de homologação foram inspecionados via `scripts/ops/inspect-qa-residual.sql`?
 - [ ] A mensagem de commit segue o padrão **Conventional Commits** (`feat:`, `fix:`, `docs:`, `chore:`)?
+
+---
+
+## 5. Referência de Deploy
+
+Consulte o plano de implantação em produção em [`../docs/deploy/README.md`](../docs/deploy/README.md). As migrations devem ser executadas no Supabase Dashboard (SQL Editor) ou via Supabase CLI autenticado.

@@ -31,8 +31,10 @@ Repositório do backend do DIYSPUR: schema PostgreSQL, migrations, RLS, views, R
 
 O schema contém as tabelas e contratos usados pelo ciclo de leitura atual, incluindo catálogo, capítulos, quizzes, progresso, comentários, encontros, enquetes, host prompts, listas, desafios, clubes, XP, achievements, notificações, preferências, conteúdo sensível e integrações de provider.
 
-A árvore versionada possui **83 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
+A árvore versionada possui **85 migrations SQL** e seeds editoriais em `supabase/seed.sql` e `supabase/seed_complement.sql`. As migrations incrementais mais recentes cobrem:
 
+- inserção atômica e serializada na fila de leitura com advisory lock e controle de capacidade 1..5 (`20261012160000_add_to_up_next_atomic.sql`);
+- cadastro editorial de livros com checagem de `is_admin()`, sanitização e auditoria transacional (`20261012161000_create_editorial_book.sql`);
 - reconciliação e integridade de produção (B01-B19): soft delete de diário e comentários, tabela de presença, proteção de desafios e capítulos em rascunho;
 - sincronização de milestones e conclusão semântica de livro;
 - proteção de conteúdo futuro e correção de recursão RLS;
@@ -44,7 +46,7 @@ A árvore versionada possui **83 migrations SQL** e seeds editoriais em `supabas
 - avisos de conteúdo de Verity;
 - desafio anual de 12 livros em 12 meses.
 
-O projeto remoto utilizado pela aplicação já recebeu as migrations funcionais desta rodada. Ainda assim, qualquer ambiente novo deve ser criado por replay ordenado das migrations e seeds; não copie estado manualmente.
+O projeto remoto utilizado pela aplicação já recebeu as migrations funcionais desta rodada. Para novas implantações, consulte o guia passo a passo em [`../docs/deploy/README.md`](../docs/deploy/README.md).
 
 ## Arquitetura
 
